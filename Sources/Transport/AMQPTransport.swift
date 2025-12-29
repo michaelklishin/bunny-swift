@@ -223,7 +223,7 @@ public actor AMQPTransport {
         var clientProperties: Table = [
             "product": .string("Bunny.Swift"),
             "platform": .string("Swift"),
-            "version": .string("0.9.0"),
+            "version": .string("0.10.0-dev"),
             "capabilities": .table([
                 "publisher_confirms": true,
                 "consumer_cancel_notify": true,
