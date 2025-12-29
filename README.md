@@ -53,7 +53,7 @@ try await connection.close()
 ```
 
 
-## API Examples
+## Usage Examples
 
 ### Declaring Queue Types
 
@@ -86,19 +86,43 @@ let custom = try await channel.queue(
 ### Publishing with Automatic Confirmation Tracking
 
 ```swift
-// Enable publisher confirms with automatic tracking
-// Publish methods will wait for broker confirmation before returning
+// Enable publisher confirms with automatic tracking (similar to the .NET client 7.x)
+// Publish methods will wait for pending confirmations to arrive before returning.
 try await channel.confirmSelect(tracking: true, outstandingLimit: 128)
 
 // Each publish now waits for confirmation (blocks until confirmed)
-try await queue.publish("Important message")
+try await queue.publish("A message")
 
-// Without tracking (manual mode), use waitForConfirms
+// Without automatic tracking (manual mode), use waitForConfirms
+// to wait until all pending confirms are received.
 try await channel.confirmSelect()
 try await queue.publish("Message 1")
 try await queue.publish("Message 2")
 // Wait for all outstanding confirms
 try await channel.waitForConfirms()
+```
+
+### Setting Channel Prefetch
+
+```swift
+// Limit unacknowledged messages per channel to 400
+try await channel.basicQos(prefetchCount: 400)
+
+// Or apply globally to all consumers on the connection
+try await channel.basicQos(prefetchCount: 400, global: true)
+```
+
+### Binding a Queue to an Exchange
+
+```swift
+let exchange = try await channel.topic("events", durable: true)
+let queue = try await channel.queue("events.important", durable: true)
+
+// Bind with a routing key pattern
+try await queue.bind(to: exchange, routingKey: "events.#")
+
+// Or bind by exchange name
+try await queue.bind(to: "events", routingKey: "events.critical.*")
 ```
 
 ### Consuming with Manual Acknowledgements
@@ -108,13 +132,43 @@ try await channel.waitForConfirms()
 let stream = try await queue.consume(acknowledgementMode: .manual)
 
 for try await message in stream {
-    print("Received: \(message.bodyString ?? "")")
+    // Access delivery metadata
+    let delivery = message.deliveryInfo
+    print("Consumer tag: \(delivery.consumerTag)")
+    print("Delivery tag: \(delivery.deliveryTag)")
+    print("Exchange: \(delivery.exchange)")
+    print("Routing key: \(delivery.routingKey)")
+    print("Redelivered: \(delivery.redelivered)")
+
+    // Access message properties
+    let props = message.properties
+    if let contentType = props.contentType {
+        print("Content-Type: \(contentType)")
+    }
+    if let messageId = props.messageId {
+        print("Message ID: \(messageId)")
+    }
+    if let correlationId = props.correlationId {
+        print("Correlation ID: \(correlationId)")
+    }
+    if let timestamp = props.timestamp {
+        print("Timestamp: \(timestamp)")
+    }
+    if let headers = props.headers {
+        print("Headers: \(headers)")
+    }
+
+    // Access message body
+    print("Body: \(message.bodyString ?? "")")
 
     // Process the message, then acknowledge
     try await message.ack()
 
     // Or reject/requeue on failure
     // try await message.nack(requeue: true)
+
+    // Or reject without requeuing
+    // try await message.reject(requeue: false)
 }
 ```
 
@@ -142,6 +196,59 @@ let customRecovery = RecoveryConfiguration(
 
 // When recovery succeeds, topology (queues, exchanges, bindings, consumers)
 // is automatically redeclared
+```
+
+### Unbinding a Queue from an Exchange
+
+```swift
+// Unbind using the exchange object
+try await queue.unbind(from: exchange, routingKey: "events.#")
+
+// Or by exchange name
+try await queue.unbind(from: "events", routingKey: "events.critical.*")
+```
+
+### Exchange-to-Exchange Bindings
+
+```swift
+// Declare a source and destination exchange
+let source = try await channel.topic("events.all", durable: true)
+let destination = try await channel.fanout("events.important", durable: true)
+
+// Bind destination exchange to the source (messages flow from source to destination)
+try await destination.bind(to: source, routingKey: "events.critical.#")
+
+// Unbind when no longer needed
+try await destination.unbind(from: source, routingKey: "events.critical.#")
+```
+
+### Deleting a Queue
+
+```swift
+// Delete a queue, returns the number of messages that were in it
+let deletedMessageCount = try await queue.delete()
+
+// Only delete if no consumers are active
+let count = try await queue.delete(ifUnused: true)
+
+// Only delete if the queue is empty
+let count = try await queue.delete(ifEmpty: true)
+
+// Or use the channel directly
+let count = try await channel.queueDelete("my.queue", ifUnused: true, ifEmpty: true)
+```
+
+### Deleting an Exchange
+
+```swift
+// Delete an exchange
+try await exchange.delete()
+
+// Only delete if no queues are bound to it
+try await exchange.delete(ifUnused: true)
+
+// Or use the channel directly
+try await channel.exchangeDelete("my.exchange", ifUnused: true)
 ```
 
 ### TLS Connections
