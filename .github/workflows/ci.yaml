@@ -1,0 +1,247 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/ci.yaml"
+      - "Sources/**"
+      - "Tests/**"
+      - "Package.swift"
+      - "Package.resolved"
+  pull_request: {}
+
+env:
+  SWIFT_VERSION: "6.0"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+  build-macos:
+    name: Build and Test (macOS)
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Swift version
+        run: swift --version
+
+      - name: Install RabbitMQ
+        run: brew install rabbitmq
+
+      - name: Start RabbitMQ
+        run: |
+          brew services start rabbitmq
+          # Wait for RabbitMQ to start
+          for i in $(seq 1 30); do
+            if rabbitmqctl status > /dev/null 2>&1; then
+              echo "RabbitMQ is ready"
+              break
+            fi
+            echo "Waiting for RabbitMQ... ($i/30)"
+            sleep 2
+          done
+
+      - name: Verify RabbitMQ is running
+        run: |
+          rabbitmqctl status
+          rabbitmq-diagnostics listeners
+
+      - name: Build
+        run: swift build
+
+      - name: Run unit tests
+        run: swift test --filter "!Integration"
+
+      - name: Run integration tests
+        run: swift test
+        env:
+          RABBITMQ_URL: "amqp://guest:guest@localhost:5672/"
+
+      - name: Stop RabbitMQ
+        if: always()
+        run: brew services stop rabbitmq || true
+
+  build-linux:
+    name: Build and Test (Linux)
+    strategy:
+      matrix:
+        rabbitmq-series:
+          - "4.0"
+          - "4.1"
+        runner:
+          - "ubuntu-22.04"
+          - "ubuntu-24.04"
+    runs-on: ${{ matrix.runner }}
+
+    services:
+      rabbitmq:
+        image: rabbitmq:${{ matrix.rabbitmq-series }}-management
+        ports:
+          - 15672:15672
+          - 5672:5672
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: ${{ env.SWIFT_VERSION }}
+
+      - name: Check Swift version
+        run: swift --version
+
+      - name: Wait for RabbitMQ to start
+        run: sleep 15
+
+      - name: Verify RabbitMQ is running
+        run: |
+          docker exec ${{ job.services.rabbitmq.id }} rabbitmqctl status
+
+      - name: Build
+        run: swift build
+
+      - name: Run unit tests
+        run: swift test --filter "!Integration"
+
+      - name: Run integration tests
+        run: swift test
+        env:
+          RABBITMQ_URL: "amqp://guest:guest@localhost:5672/"
+
+  tls-tests:
+    name: TLS Tests
+    strategy:
+      matrix:
+        rabbitmq-series:
+          - "4.0"
+          - "4.1"
+        runner:
+          - "ubuntu-22.04"
+          - "ubuntu-24.04"
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: ${{ env.SWIFT_VERSION }}
+
+      - name: Check Swift version
+        run: swift --version
+
+      - name: Clone tls-gen
+        run: git clone --depth 1 https://github.com/rabbitmq/tls-gen.git target/tls-gen
+
+      - name: Generate TLS certificates
+        run: |
+          cd target/tls-gen/basic
+          make CN=localhost
+
+      - name: Create certs directory
+        run: mkdir -p tests/tls/certs
+
+      - name: Copy certificates
+        run: |
+          cp target/tls-gen/basic/result/ca_certificate.pem tests/tls/certs/
+          cp target/tls-gen/basic/result/server_localhost_certificate.pem tests/tls/certs/server_certificate.pem
+          cp target/tls-gen/basic/result/server_localhost_key.pem tests/tls/certs/server_key.pem
+          cp target/tls-gen/basic/result/client_localhost_certificate.pem tests/tls/certs/client_certificate.pem
+          cp target/tls-gen/basic/result/client_localhost_key.pem tests/tls/certs/client_key.pem
+          chmod o+r tests/tls/certs/*
+          chmod g+r tests/tls/certs/*
+
+      - name: Create RabbitMQ TLS configuration
+        run: |
+          cat > tests/tls/certs/rabbitmq.conf << 'EOF'
+          listeners.ssl.default = 5671
+          ssl_options.cacertfile = /certs/ca_certificate.pem
+          ssl_options.certfile   = /certs/server_certificate.pem
+          ssl_options.keyfile    = /certs/server_key.pem
+          ssl_options.verify     = verify_peer
+          ssl_options.fail_if_no_peer_cert = false
+          listeners.tcp.default  = 5672
+          loopback_users         = none
+          EOF
+          sed -i 's/^[[:space:]]*//' tests/tls/certs/rabbitmq.conf
+          echo "Generated config:"
+          cat tests/tls/certs/rabbitmq.conf
+          echo -n "rabbitmq-test-cookie" > tests/tls/certs/.erlang.cookie
+          chmod 600 tests/tls/certs/.erlang.cookie
+
+      - name: Start RabbitMQ with TLS
+        run: |
+          docker run -d --name rabbitmq-tls \
+            -p 5671:5671 \
+            -p 5672:5672 \
+            -p 15672:15672 \
+            -v ${{ github.workspace }}/tests/tls/certs/.erlang.cookie:/var/lib/rabbitmq/.erlang.cookie \
+            -v ${{ github.workspace }}/tests/tls/certs:/certs:ro \
+            -v ${{ github.workspace }}/tests/tls/certs/rabbitmq.conf:/etc/rabbitmq/conf.d/10-tls.conf:ro \
+            rabbitmq:${{ matrix.rabbitmq-series }}-management
+
+      - name: Wait for RabbitMQ to start
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec rabbitmq-tls rabbitmqctl await_startup --timeout 60; then
+              echo "RabbitMQ is ready"
+              exit 0
+            fi
+            echo "Waiting for container... ($i/30)"
+            sleep 2
+          done
+          echo "RabbitMQ failed to start. Container logs:"
+          docker logs rabbitmq-tls
+          exit 1
+
+      - name: Verify TLS listener
+        run: |
+          docker exec rabbitmq-tls rabbitmq-diagnostics listeners
+          echo "Checking if TLS port 5671 is listening..."
+          docker exec rabbitmq-tls rabbitmq-diagnostics listeners | grep -E "5671|ssl" || echo "Note: TLS listener output"
+
+      - name: Debug TLS certificates
+        run: |
+          echo "=== CA Certificate ==="
+          openssl x509 -in tests/tls/certs/ca_certificate.pem -noout -subject -issuer
+          echo "=== Server Certificate ==="
+          openssl x509 -in tests/tls/certs/server_certificate.pem -noout -subject -issuer
+          echo "=== Verify server cert against CA ==="
+          openssl verify -CAfile tests/tls/certs/ca_certificate.pem tests/tls/certs/server_certificate.pem
+          echo "=== Certificate file permissions ==="
+          ls -la tests/tls/certs/
+
+      - name: Configure broker
+        run: |
+          docker exec rabbitmq-tls rabbitmqctl add_vhost / || true
+          docker exec rabbitmq-tls rabbitmqctl add_user guest guest || true
+          docker exec rabbitmq-tls rabbitmqctl set_permissions -p / guest ".*" ".*" ".*"
+
+      - name: Build
+        run: swift build
+
+      - name: Run TLS tests
+        run: |
+          TLS_CERTS_DIR=${{ github.workspace }}/tests/tls/certs \
+          swift test --filter "TLS"
+        env:
+          RABBITMQ_TLS_URL: "amqps://guest:guest@localhost:5671/"
+
+      - name: Stop RabbitMQ container
+        if: always()
+        run: docker stop rabbitmq-tls && docker rm rabbitmq-tls || true
