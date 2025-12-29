@@ -237,16 +237,16 @@ public struct WireDecoder {
             throw WireFormatError.insufficientData(needed: 8, available: remaining)
         }
         let start = data.startIndex + offset
-        let value = (UInt64(data[start]) << 56) |
-                    (UInt64(data[start + 1]) << 48) |
-                    (UInt64(data[start + 2]) << 40) |
-                    (UInt64(data[start + 3]) << 32) |
-                    (UInt64(data[start + 4]) << 24) |
-                    (UInt64(data[start + 5]) << 16) |
-                    (UInt64(data[start + 6]) << 8) |
-                    UInt64(data[start + 7])
+        let high: UInt64 = (UInt64(data[start]) << 56) |
+                           (UInt64(data[start + 1]) << 48) |
+                           (UInt64(data[start + 2]) << 40) |
+                           (UInt64(data[start + 3]) << 32)
+        let low: UInt64 = (UInt64(data[start + 4]) << 24) |
+                          (UInt64(data[start + 5]) << 16) |
+                          (UInt64(data[start + 6]) << 8) |
+                          UInt64(data[start + 7])
         offset += 8
-        return value
+        return high | low
     }
 
     /// Read a 64-bit signed integer (big-endian)
