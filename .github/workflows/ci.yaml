@@ -20,7 +20,7 @@ jobs:
     name: Lint
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check Swift version
         run: swift --version
@@ -33,7 +33,7 @@ jobs:
     runs-on: macos-14
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check Swift version
         run: swift --version
@@ -94,7 +94,7 @@ jobs:
           - 5672:5672
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Swift
         uses: swift-actions/setup-swift@v2
@@ -135,7 +135,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Swift
         uses: swift-actions/setup-swift@v2
