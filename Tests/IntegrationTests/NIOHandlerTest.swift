@@ -58,7 +58,7 @@ final class TestEncoder: MessageToByteEncoder, @unchecked Sendable {
 @Suite("NIO Handler Debug Tests")
 struct NIOHandlerDebugTests {
 
-  @Test("Simple byte handler works", .timeLimit(.seconds(30)))
+  @Test("Simple byte handler works", .timeLimit(.minutes(1)))
   func simpleByteHandler() async throws {
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
@@ -73,7 +73,7 @@ struct NIOHandlerDebugTests {
     try await group.shutdownGracefully()
   }
 
-  @Test("Frame handler works", .timeLimit(.seconds(30)))
+  @Test("Frame handler works", .timeLimit(.minutes(1)))
   func frameHandler() async throws {
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
@@ -88,7 +88,7 @@ struct NIOHandlerDebugTests {
     try await group.shutdownGracefully()
   }
 
-  @Test("ByteToMessageDecoder works", .timeLimit(.seconds(30)))
+  @Test("ByteToMessageDecoder works", .timeLimit(.minutes(1)))
   func decoderHandler() async throws {
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
@@ -103,7 +103,7 @@ struct NIOHandlerDebugTests {
     try await group.shutdownGracefully()
   }
 
-  @Test("MessageToByteEncoder works", .timeLimit(.seconds(30)))
+  @Test("MessageToByteEncoder works", .timeLimit(.minutes(1)))
   func encoderHandler() async throws {
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
@@ -118,7 +118,7 @@ struct NIOHandlerDebugTests {
     try await group.shutdownGracefully()
   }
 
-  @Test("Combined decoder and encoder works", .timeLimit(.seconds(30)))
+  @Test("Combined decoder and encoder works", .timeLimit(.minutes(1)))
   func combinedHandlers() async throws {
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
