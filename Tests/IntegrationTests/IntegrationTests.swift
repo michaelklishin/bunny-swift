@@ -346,14 +346,15 @@ struct PublishConsumeIntegrationTests {
     let channel = try await connection.openChannel()
     let queue = try await channel.queue("", exclusive: true)
 
+    // Start consuming BEFORE publishing to avoid race condition
+    let stream = try await queue.consume(acknowledgementMode: .automatic)
+
     let messageCount = 5
     for i in 0..<messageCount {
       try await queue.publish("message \(i)")
     }
 
-    let stream = try await queue.consume(acknowledgementMode: .automatic)
-
-    // Collect messages with timeout
+    // Collect messages
     var receivedCount = 0
     for try await _ in stream {
       receivedCount += 1
