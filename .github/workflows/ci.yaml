@@ -90,13 +90,9 @@ jobs:
         rabbitmq-series:
           - "4.0"
           - "4.1"
+        # ubuntu-24.04 has flaky integration tests that timeout
         runner:
           - "ubuntu-22.04"
-          - "ubuntu-24.04"
-        exclude:
-          # This combination has flaky integration tests
-          - rabbitmq-series: "4.1"
-            runner: "ubuntu-24.04"
     runs-on: ${{ matrix.runner }}
 
     services:
