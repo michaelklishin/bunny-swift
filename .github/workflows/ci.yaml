@@ -84,7 +84,6 @@ jobs:
   build-linux:
     name: Build and Test (Linux)
     timeout-minutes: 15
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -94,6 +93,10 @@ jobs:
         runner:
           - "ubuntu-22.04"
           - "ubuntu-24.04"
+        exclude:
+          # This combination has flaky integration tests
+          - rabbitmq-series: "4.1"
+            runner: "ubuntu-24.04"
     runs-on: ${{ matrix.runner }}
 
     services:
