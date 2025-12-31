@@ -22,10 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Swift
-        uses: swift-actions/setup-swift@v3
-        with:
-          swift-version: ${{ env.SWIFT_VERSION }}
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
 
       - name: Check Swift version
         run: swift --version
@@ -40,10 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Swift
-        uses: swift-actions/setup-swift@v3
-        with:
-          swift-version: ${{ env.SWIFT_VERSION }}
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
 
       - name: Check Swift version
         run: swift --version
