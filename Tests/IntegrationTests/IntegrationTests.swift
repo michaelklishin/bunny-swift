@@ -57,7 +57,7 @@ struct IntegrationTests {
 @Suite("Connection Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct ConnectionIntegrationTests {
 
-  @Test("Connect with default configuration")
+  @Test("Connect with default configuration", .timeLimit(.seconds(30)))
   func connectWithDefaults() async throws {
     let connection = try await TestConfig.openConnection()
     let isConnected = await connection.connected
@@ -67,7 +67,7 @@ struct ConnectionIntegrationTests {
     #expect(isDisconnected)
   }
 
-  @Test("Connect with URI")
+  @Test("Connect with URI", .timeLimit(.seconds(30)))
   func connectWithURI() async throws {
     var config = TestConfig.connectionConfiguration()
     let uri = try ConnectionConfiguration.from(uri: TestConfig.rabbitmqURL)
@@ -82,7 +82,7 @@ struct ConnectionIntegrationTests {
     try await connection.close()
   }
 
-  @Test("Server properties are available")
+  @Test("Server properties are available", .timeLimit(.seconds(30)))
   func serverProperties() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -93,7 +93,7 @@ struct ConnectionIntegrationTests {
     #expect(hasProduct)
   }
 
-  @Test("Negotiated parameters are reasonable")
+  @Test("Negotiated parameters are reasonable", .timeLimit(.seconds(30)))
   func negotiatedParameters() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -110,7 +110,7 @@ struct ConnectionIntegrationTests {
 @Suite("Channel Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct ChannelIntegrationTests {
 
-  @Test("Open and close channel")
+  @Test("Open and close channel", .timeLimit(.seconds(30)))
   func openAndCloseChannel() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -126,7 +126,7 @@ struct ChannelIntegrationTests {
     #expect(isClosed)
   }
 
-  @Test("Open multiple channels")
+  @Test("Open multiple channels", .timeLimit(.seconds(30)))
   func openMultipleChannels() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -152,7 +152,7 @@ struct ChannelIntegrationTests {
 @Suite("Queue Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct QueueIntegrationTests {
 
-  @Test("Declare and delete queue")
+  @Test("Declare and delete queue", .timeLimit(.seconds(30)))
   func declareAndDeleteQueue() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -168,7 +168,7 @@ struct QueueIntegrationTests {
     #expect(deletedCount >= 0)
   }
 
-  @Test("Declare server-named queue")
+  @Test("Declare server-named queue", .timeLimit(.seconds(30)))
   func serverNamedQueue() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -182,7 +182,7 @@ struct QueueIntegrationTests {
     _ = try await queue.delete()
   }
 
-  @Test("Declare durable queue")
+  @Test("Declare durable queue", .timeLimit(.seconds(30)))
   func durableQueue() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -196,7 +196,7 @@ struct QueueIntegrationTests {
     _ = try await queue.delete()
   }
 
-  @Test("Purge queue")
+  @Test("Purge queue", .timeLimit(.seconds(30)))
   func purgeQueue() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -224,7 +224,7 @@ struct QueueIntegrationTests {
 @Suite("Exchange Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct ExchangeIntegrationTests {
 
-  @Test("Declare and delete exchange")
+  @Test("Declare and delete exchange", .timeLimit(.seconds(30)))
   func declareAndDeleteExchange() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -238,7 +238,7 @@ struct ExchangeIntegrationTests {
     _ = try await exchange.delete()
   }
 
-  @Test("Declare fanout exchange")
+  @Test("Declare fanout exchange", .timeLimit(.seconds(30)))
   func fanoutExchange() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -252,7 +252,7 @@ struct ExchangeIntegrationTests {
     _ = try await exchange.delete()
   }
 
-  @Test("Declare topic exchange")
+  @Test("Declare topic exchange", .timeLimit(.seconds(30)))
   func topicExchange() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -272,7 +272,7 @@ struct ExchangeIntegrationTests {
 @Suite("Binding Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct BindingIntegrationTests {
 
-  @Test("Bind queue to exchange")
+  @Test("Bind queue to exchange", .timeLimit(.seconds(30)))
   func bindQueueToExchange() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -297,7 +297,7 @@ struct BindingIntegrationTests {
 @Suite("Publish/Consume Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct PublishConsumeIntegrationTests {
 
-  @Test("Publish and consume single message")
+  @Test("Publish and consume single message", .timeLimit(.seconds(30)))
   func publishAndConsumeSingle() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -316,7 +316,7 @@ struct PublishConsumeIntegrationTests {
     _ = try await queue.delete()
   }
 
-  @Test("Publish with properties")
+  @Test("Publish with properties", .timeLimit(.seconds(30)))
   func publishWithProperties() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -338,7 +338,7 @@ struct PublishConsumeIntegrationTests {
     _ = try await queue.delete()
   }
 
-  @Test("Consume with async stream")
+  @Test("Consume with async stream", .timeLimit(.minutes(1)))
   func consumeWithAsyncStream() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -374,7 +374,7 @@ struct PublishConsumeIntegrationTests {
 @Suite("Acknowledgement Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct AcknowledgementIntegrationTests {
 
-  @Test("Manual acknowledgement")
+  @Test("Manual acknowledgement", .timeLimit(.seconds(30)))
   func manualAck() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -396,7 +396,7 @@ struct AcknowledgementIntegrationTests {
     _ = try await queue.delete()
   }
 
-  @Test("Negative acknowledgement with requeue")
+  @Test("Negative acknowledgement with requeue", .timeLimit(.seconds(30)))
   func nackWithRequeue() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -419,7 +419,7 @@ struct AcknowledgementIntegrationTests {
     _ = try await queue.delete()
   }
 
-  @Test("Reject message")
+  @Test("Reject message", .timeLimit(.seconds(30)))
   func rejectMessage() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -446,7 +446,7 @@ struct AcknowledgementIntegrationTests {
 @Suite("QoS Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct QoSIntegrationTests {
 
-  @Test("Set prefetch count")
+  @Test("Set prefetch count", .timeLimit(.seconds(30)))
   func setPrefetchCount() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -463,7 +463,7 @@ struct QoSIntegrationTests {
 @Suite("Transaction Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct TransactionIntegrationTests {
 
-  @Test("Transaction commit")
+  @Test("Transaction commit", .timeLimit(.seconds(30)))
   func transactionCommit() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -482,7 +482,7 @@ struct TransactionIntegrationTests {
     _ = try await queue.delete()
   }
 
-  @Test("Transaction rollback")
+  @Test("Transaction rollback", .timeLimit(.seconds(30)))
   func transactionRollback() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -506,7 +506,7 @@ struct TransactionIntegrationTests {
 @Suite("Publisher Confirms Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
 struct PublisherConfirmsIntegrationTests {
 
-  @Test("Enable confirm mode")
+  @Test("Enable confirm mode", .timeLimit(.seconds(30)))
   func enableConfirmMode() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
@@ -518,7 +518,7 @@ struct PublisherConfirmsIntegrationTests {
     #expect(seqNo == 1)
   }
 
-  @Test("Publish sequence number increments")
+  @Test("Publish sequence number increments", .timeLimit(.seconds(30)))
   func publishSeqNoIncrements() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }

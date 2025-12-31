@@ -34,6 +34,7 @@ jobs:
   build-macos:
     name: Build and Test (macOS)
     runs-on: macos-14
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
@@ -82,6 +83,7 @@ jobs:
 
   build-linux:
     name: Build and Test (Linux)
+    timeout-minutes: 15
     strategy:
       matrix:
         rabbitmq-series:
@@ -130,6 +132,7 @@ jobs:
 
   tls-tests:
     name: TLS Tests
+    timeout-minutes: 15
     strategy:
       matrix:
         rabbitmq-series:
