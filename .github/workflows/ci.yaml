@@ -106,6 +106,7 @@ jobs:
         uses: swift-actions/setup-swift@v3
         with:
           swift-version: ${{ env.SWIFT_VERSION }}
+          skip-verify-signature: true
 
       - name: Check Swift version
         run: swift --version
@@ -147,6 +148,7 @@ jobs:
         uses: swift-actions/setup-swift@v3
         with:
           swift-version: ${{ env.SWIFT_VERSION }}
+          skip-verify-signature: true
 
       - name: Check Swift version
         run: swift --version
