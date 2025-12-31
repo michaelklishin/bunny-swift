@@ -32,6 +32,10 @@ public struct ConnectionConfiguration: Sendable {
   /// Write buffering: max time before flushing pending writes
   public var writeBufferFlushInterval: TimeAmount
 
+  /// Socket options that may require elevated permissions in some environments
+  public var enableTCPNoDelay: Bool
+  public var enableTCPKeepAlive: Bool
+
   public init(
     host: String = "localhost",
     port: Int = 5672,
@@ -45,7 +49,9 @@ public struct ConnectionConfiguration: Sendable {
     connectionTimeout: TimeAmount = .seconds(30),
     connectionName: String? = nil,
     writeBufferFlushThreshold: Int = 64,
-    writeBufferFlushInterval: TimeAmount = .milliseconds(1)
+    writeBufferFlushInterval: TimeAmount = .milliseconds(1),
+    enableTCPNoDelay: Bool = true,
+    enableTCPKeepAlive: Bool = true
   ) {
     self.host = host
     self.port = port
@@ -60,6 +66,8 @@ public struct ConnectionConfiguration: Sendable {
     self.connectionName = connectionName
     self.writeBufferFlushThreshold = writeBufferFlushThreshold
     self.writeBufferFlushInterval = writeBufferFlushInterval
+    self.enableTCPNoDelay = enableTCPNoDelay
+    self.enableTCPKeepAlive = enableTCPKeepAlive
   }
 
   /// Create configuration from AMQP URI
