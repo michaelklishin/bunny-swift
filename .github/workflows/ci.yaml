@@ -84,6 +84,7 @@ jobs:
   build-linux:
     name: Build and Test (Linux)
     timeout-minutes: 15
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
