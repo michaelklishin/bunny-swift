@@ -1,5 +1,10 @@
 ## 0.10.0 (in development)
 
+### Enhancements
+
+ * `Connection.withChannel` can be used for short-lived channels, [a pattern that is discouraged](https://www.rabbitmq.com/docs/channels#high-channel-churn)
+   but can be useful in integration tests
+
 ### Bug Fixes
 
  * Heartbeat monitor setup was unintentionally skipped
