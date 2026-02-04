@@ -304,6 +304,10 @@ public actor AMQPTransport {
 
     try await installEncoder(frameMax: frameMax)
 
+    if heartbeat > 0 {
+      try await setupHeartbeat(interval: heartbeat)
+    }
+
     return NegotiatedParameters(
       channelMax: channelMax,
       frameMax: frameMax,

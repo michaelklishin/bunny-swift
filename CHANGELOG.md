@@ -1,6 +1,8 @@
 ## 0.10.0 (in development)
 
-No changes yet.
+### Bug Fixes
+
+ * Heartbeat monitor setup was unintentionally skipped
 
 
 ## 0.9.0 (Dec 29, 2025)
