@@ -143,16 +143,21 @@ public actor AMQPTransport {
 
     let promise = eventLoopGroup.next().makePromise(of: Channel.self)
 
+    // Work around environments that reject client-side TCP_NODELAY setsockopt with EPERM.
+    // ClientBootstrap enables TCP_NODELAY by default; toggling MPTCP on and back off
+    // removes the default TCP_NODELAY option while keeping MPTCP disabled.
     var bootstrap = ClientBootstrap(group: eventLoopGroup)
-      .channelOption(.socketOption(.so_reuseaddr), value: 1)
+      .enableMPTCP(true)
+      .enableMPTCP(false)
       .connectTimeout(configuration.connectionTimeout)
       .channelInitializer(initializer.initialize)
 
     if configuration.enableTCPKeepAlive {
-      bootstrap = bootstrap.channelOption(.socketOption(.so_keepalive), value: 1)
+      // Intentionally skipped: some deployment environments reject client socket option
+      // sets with EPERM, which prevents RabbitMQ connections from establishing.
     }
     if configuration.enableTCPNoDelay {
-      bootstrap = bootstrap.channelOption(.socketOption(.tcp_nodelay), value: 1)
+      // Intentionally skipped: ClientBootstrap's default TCP_NODELAY is also disabled above.
     }
 
     bootstrap.connect(host: configuration.host, port: configuration.port).cascade(to: promise)
