@@ -174,28 +174,56 @@ for try await message in stream {
 
 ### Connection Recovery
 
-BunnySwift includes infrastructure for automatic connection recovery with exponential backoff:
+Automatic connection recovery, inspired by [Ruby Bunny](https://github.com/ruby-amqp/bunny)
+and the [Java client](https://www.rabbitmq.com/client-libraries/java-api-guide),
+is enabled by default, including topology recovery.
+
+When a connection is lost due to a network failure, heartbeat timeout, or server-initiated close, the library will automatically reconnect
+and recover the topology (exchanges, queues, streams, bindings, consumers).
+
+The recovery procedure is [standard](https://www.rabbitmq.com/client-libraries/java-api-guide#recovery) for multiple RabbitMQ client libraries.
+
+Recovery behavior can be customised:
 
 ```swift
-// Use sensible defaults
-let recovery = RecoveryConfiguration.default
-
-// Or customize recovery behavior
-let customRecovery = RecoveryConfiguration(
-    // Enable automatic recovery
-    automaticRecovery: true,
-    // Initial delay before first attempt
+let config = ConnectionConfiguration(
+    // Initial delay before first recovery attempt (default: 5 s)
     networkRecoveryInterval: 5.0,
-    // nil for unlimited attempts
+    // nil for unlimited attempts (default)
     maxRecoveryAttempts: nil,
-    // Exponential backoff multiplier
-    backoffMultiplier: 2.0,
-    // Maximum delay between attempts
+    // Exponential backoff multiplier (default: 2.0)
+    recoveryBackoffMultiplier: 2.0,
+    // Maximum delay between attempts (default: 60 s)
     maxRecoveryInterval: 60.0
 )
 
-// When recovery succeeds, topology (queues, exchanges, bindings, consumers)
-// is automatically redeclared
+let connection = try await Connection.open(config)
+```
+
+To be notified after a successful recovery:
+
+```swift
+connection.onRecovery {
+    print("Connection recovered")
+}
+```
+
+By default, all exchanges, queues, bindings, and consumers declared through the connection are
+redeclared after reconnecting. 
+
+To selectively skip certain entities, use a `TopologyRecoveryFilter`:
+
+```swift
+connection.setTopologyRecoveryFilter(TopologyRecoveryFilter(
+    queueFilter: { queue in !queue.autoDelete },
+    exchangeFilter: { exchange in exchange.durable }
+))
+```
+
+To disable automatic recovery:
+
+```swift
+let config = ConnectionConfiguration(automaticRecovery: false)
 ```
 
 ### Unbinding a Queue from an Exchange
