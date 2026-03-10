@@ -352,8 +352,14 @@ public actor AMQPTransport {
     }
   }
 
-  public func setFrameHandler(_ handler: @escaping @Sendable (Frame) async -> Void) {
+  private var onDisconnect: (@Sendable () async -> Void)?
+
+  public func setFrameHandler(
+    _ handler: @escaping @Sendable (Frame) async -> Void,
+    onDisconnect: @escaping @Sendable () async -> Void
+  ) {
     self.frameHandler = handler
+    self.onDisconnect = onDisconnect
     startFrameDispatcher()
   }
 
@@ -365,7 +371,37 @@ public actor AMQPTransport {
           await handler(frame)
         }
       }
+      // Frame stream ended: the connection was lost
+      if let self = self, let onDisconnect = await self.onDisconnect {
+        await self.markDisconnected()
+        await onDisconnect()
+      }
     }
+  }
+
+  private func markDisconnected() {
+    isConnected = false
+    scheduledFlush?.cancel()
+    scheduledFlush = nil
+  }
+
+  /// Resets internal state.
+  /// Must be called before calling `connect` or after a connection failure.
+  public func resetForRecovery() async {
+    frameDispatchTask?.cancel()
+    frameDispatchTask = nil
+    scheduledFlush?.cancel()
+    scheduledFlush = nil
+    frameContinuation?.finish()
+    frameIterator = nil
+    frameStream = nil
+    if let channel = channel {
+      try? await channel.close().get()
+      self.channel = nil
+    }
+    isConnected = false
+    negotiatedParams = nil
+    pendingWrites = 0
   }
 
   private func nextFrame() async -> Frame? {
@@ -393,7 +429,7 @@ public actor AMQPTransport {
         _ = await self.nextFrame()
       }
       group.addTask {
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        try? await Task.sleep(for: .milliseconds(500))
       }
       _ = await group.next()
       group.cancelAll()

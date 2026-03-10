@@ -26,6 +26,14 @@ struct ConnectionConfigurationTests {
     #expect(config.heartbeat == 60)
     #expect(config.frameMax == 131072)
     #expect(config.channelMax == 2047)
+    #expect(config.automaticRecovery == true)
+    #expect(config.networkRecoveryInterval == 5.0)
+    #expect(config.maxRecoveryAttempts == nil)
+    #expect(config.recoveryBackoffMultiplier == 2.0)
+    #expect(config.maxRecoveryInterval == 60.0)
+    #expect(config.topologyRecovery == true)
+    #expect(config.endpoints.isEmpty)
+    #expect(config.shuffleEndpoints == true)
   }
 
   // MARK: - URI Parsing
@@ -121,5 +129,52 @@ struct TLSConfigurationTests {
   func insecureConfig() {
     let config = TLSConfiguration.insecure()
     #expect(config.certificateVerification == .none)
+  }
+}
+
+// MARK: - Endpoint Tests
+
+@Suite("Endpoint Tests")
+struct EndpointTests {
+
+  @Test("Default port is 5672")
+  func defaultPort() {
+    let endpoint = Endpoint(host: "rabbit.local")
+    #expect(endpoint.host == "rabbit.local")
+    #expect(endpoint.port == 5672)
+  }
+
+  @Test("Custom port")
+  func customPort() {
+    let endpoint = Endpoint(host: "rabbit.local", port: 5671)
+    #expect(endpoint.port == 5671)
+  }
+
+  @Test("Endpoints are equatable and hashable")
+  func equatableHashable() {
+    let a = Endpoint(host: "host1", port: 5672)
+    let b = Endpoint(host: "host1", port: 5672)
+    let c = Endpoint(host: "host2", port: 5672)
+    #expect(a == b)
+    #expect(a != c)
+
+    let set: Set<Endpoint> = [a, b, c]
+    #expect(set.count == 2)
+  }
+
+  @Test("Configuration with multiple endpoints")
+  func configWithEndpoints() {
+    let config = ConnectionConfiguration(
+      endpoints: [
+        Endpoint(host: "node1"),
+        Endpoint(host: "node2", port: 5673),
+        Endpoint(host: "node3"),
+      ],
+      shuffleEndpoints: false
+    )
+    #expect(config.endpoints.count == 3)
+    #expect(config.endpoints[0].host == "node1")
+    #expect(config.endpoints[1].port == 5673)
+    #expect(config.shuffleEndpoints == false)
   }
 }

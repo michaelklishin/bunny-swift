@@ -109,7 +109,7 @@ public enum QueueLeaderLocator: String, Sendable {
   /// Place leader on the node the client is connected to
   case clientLocal = "client-local"
   /// Dynamically picks one of the two strategies internally depending on how many
-  // queues there are in the system
+  /// queues there are in the system
   case balanced = "balanced"
 }
 

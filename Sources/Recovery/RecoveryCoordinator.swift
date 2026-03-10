@@ -135,7 +135,7 @@ public actor RecoveryCoordinator {
         state = .recovering(attempt: attempt)
 
         do {
-          try await Task.sleep(nanoseconds: UInt64(currentInterval * 1_000_000_000))
+          try await Task.sleep(for: .seconds(currentInterval))
         } catch {
           return
         }

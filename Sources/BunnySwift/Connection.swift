@@ -8,10 +8,11 @@
 @_exported import AMQPProtocol
 import Foundation
 import NIO
+import Recovery
 @_exported import Transport
 
 public actor Connection {
-  private let transport: AMQPTransport
+  private var transport: AMQPTransport
   private let configuration: ConnectionConfiguration
   private var negotiatedParams: NegotiatedParameters?
   private var channels: [UInt16: Channel] = [:]
@@ -19,13 +20,52 @@ public actor Connection {
   private var isOpen = false
   private var blockedReason: String?
 
+  private var closedByClient = false
+  private var recovering = false
+
+  /// Resolved endpoint list, shuffled once at creation time.
+  private var resolvedEndpoints: [Endpoint]
+  private var endpointIndex: Int = 0
+
   private var onBlockedHandlers: [@Sendable (String) -> Void] = []
   private var onUnblockedHandlers: [@Sendable () -> Void] = []
   private var onCloseHandlers: [@Sendable (ConnectionClose) -> Void] = []
+  private var onRecoveryHandlers: [@Sendable () async -> Void] = []
+  private var onRecoveryFailureHandlers: [@Sendable (any Error) async -> Void] = []
+  private var onQueueNameChangeHandlers:
+    [@Sendable (_ oldName: String, _ newName: String) async -> Void] =
+      []
+  private var onConsumerTagChangeHandlers:
+    [@Sendable (_ oldTag: String, _ newTag: String) async -> Void] = []
+
+  // MARK: - Topology
+
+  /// Recorded topology used for automatic recovery after reconnection.
+  public let topologyRegistry: TopologyRegistry
+
+  /// Optional filter to selectively exclude entities from topology recovery.
+  private var _topologyRecoveryFilter: TopologyRecoveryFilter?
+
+  /// Set a filter to selectively exclude entities from topology recovery.
+  public func setTopologyRecoveryFilter(_ filter: TopologyRecoveryFilter?) {
+    _topologyRecoveryFilter = filter
+  }
+
+  // MARK: - Initialization
 
   private init(transport: AMQPTransport, configuration: ConnectionConfiguration) {
     self.transport = transport
     self.configuration = configuration
+    self.topologyRegistry = TopologyRegistry()
+
+    var endpoints =
+      configuration.endpoints.isEmpty
+      ? [Endpoint(host: configuration.host, port: configuration.port)]
+      : configuration.endpoints
+    if configuration.shuffleEndpoints && endpoints.count > 1 {
+      endpoints.shuffle()
+    }
+    self.resolvedEndpoints = endpoints
   }
 
   // MARK: - Factory
@@ -60,10 +100,29 @@ public actor Connection {
   }
 
   private func connect() async throws {
-    let params = try await transport.connect(configuration: configuration)
+    let params = try await connectToNextEndpoint()
     self.negotiatedParams = params
     self.isOpen = true
     await startFrameDispatcher()
+  }
+
+  /// Tries each endpoint in sequence, advancing the index on failure.
+  private func connectToNextEndpoint() async throws -> NegotiatedParameters {
+    var lastError: (any Error)?
+    for _ in resolvedEndpoints.indices {
+      let endpoint = resolvedEndpoints[endpointIndex]
+      var config = configuration
+      config.host = endpoint.host
+      config.port = endpoint.port
+      do {
+        return try await transport.connect(configuration: config)
+      } catch {
+        lastError = error
+        endpointIndex = (endpointIndex + 1) % resolvedEndpoints.count
+        await transport.resetForRecovery()
+      }
+    }
+    throw lastError ?? ConnectionError.notConnected
   }
 
   // MARK: - Channels
@@ -130,10 +189,16 @@ public actor Connection {
   // MARK: - Frame Dispatch
 
   private func startFrameDispatcher() async {
-    await transport.setFrameHandler { [weak self] frame in
-      guard let self = self else { return }
-      await self.dispatchFrame(frame)
-    }
+    await transport.setFrameHandler(
+      { [weak self] frame in
+        guard let self = self else { return }
+        await self.dispatchFrame(frame)
+      },
+      onDisconnect: { [weak self] in
+        guard let self = self else { return }
+        await self.handleDisconnection()
+      }
+    )
   }
 
   private func dispatchFrame(_ frame: Frame) async {
@@ -157,7 +222,7 @@ public actor Connection {
       for handler in onCloseHandlers { handler(close) }
       isOpen = false
       try? await transport.send(.method(channelID: 0, method: .connectionCloseOk))
-      await transport.forceClose()
+    // Let the frame stream end naturally to trigger handleDisconnection
 
     case .connectionBlocked(let blocked):
       blockedReason = blocked.reason
@@ -169,6 +234,161 @@ public actor Connection {
 
     default:
       break
+    }
+  }
+
+  // MARK: - Automatic Recovery
+
+  /// Called when the frame dispatcher terminates unexpectedly (network failure, heartbeat timeout).
+  private func handleDisconnection() async {
+    guard !closedByClient else { return }
+    guard !recovering else { return }
+
+    isOpen = false
+
+    // Notify all channels that the connection is lost so pending operations fail
+    for channel in channels.values {
+      await channel.handleConnectionLost()
+    }
+
+    guard configuration.automaticRecovery else {
+      // No recovery: terminate all consumer streams permanently
+      for channel in channels.values {
+        await channel.terminateConsumers()
+      }
+      return
+    }
+
+    // Spawn recovery in a new task so it is not cancelled when
+    // resetForRecovery cancels the old frame dispatch task.
+    recovering = true
+    Task { [weak self] in
+      await self?.performRecovery()
+    }
+  }
+
+  /// Attempts to reconnect, restore channels, and recover topology.
+  private func performRecovery() async {
+    defer { recovering = false }
+
+    var attempt = 1
+    var currentInterval = configuration.networkRecoveryInterval
+
+    while !closedByClient {
+      if let maxAttempts = configuration.maxRecoveryAttempts, attempt > maxAttempts {
+        let error = ConnectionError.protocolError("Max recovery attempts (\(maxAttempts)) exceeded")
+        for channel in channels.values {
+          await channel.terminateConsumers()
+        }
+        for handler in onRecoveryFailureHandlers {
+          await handler(error)
+        }
+        return
+      }
+
+      do {
+        try await Task.sleep(for: .seconds(currentInterval))
+      } catch {
+        return
+      }
+
+      do {
+        await transport.resetForRecovery()
+        let params = try await connectToNextEndpoint()
+        self.negotiatedParams = params
+        self.isOpen = true
+
+        // Start the frame dispatcher before channel recovery so RPC
+        // responses (channel.open-ok, basic.qos-ok, etc.) are delivered.
+        await startFrameDispatcher()
+
+        for (_, channel) in channels {
+          try await channel.recoverOnNewConnection()
+        }
+
+        if configuration.topologyRecovery {
+          await recoverTopology()
+        }
+
+        for (_, channel) in channels {
+          await channel.notifyRecovered()
+        }
+
+        for handler in onRecoveryHandlers {
+          await handler()
+        }
+        return
+      } catch {
+        attempt += 1
+        currentInterval = min(
+          currentInterval * configuration.recoveryBackoffMultiplier,
+          configuration.maxRecoveryInterval
+        )
+      }
+    }
+  }
+
+  private func recoverTopology() async {
+    guard let channel = channels.values.first else { return }
+    let filter = _topologyRecoveryFilter
+
+    // 1. Exchanges (skip predeclared amq.* and default exchange)
+    for exchange in await topologyRegistry.allExchanges() {
+      if exchange.name.isEmpty || exchange.name.hasPrefix("amq.") { continue }
+      if let f = filter?.exchangeFilter, !f(exchange) { continue }
+      do { try await channel.redeclareExchange(exchange) } catch {}
+    }
+
+    // 2. Queues (updating server-named queue names)
+    for queue in await topologyRegistry.allQueues() {
+      if let f = filter?.queueFilter, !f(queue) { continue }
+      do {
+        let newName = try await channel.redeclareQueue(queue)
+        if queue.serverNamed && newName != queue.name {
+          let oldName = queue.name
+          await topologyRegistry.updateQueueName(from: oldName, to: newName)
+          for handler in onQueueNameChangeHandlers {
+            await handler(oldName, newName)
+          }
+        }
+      } catch {}
+    }
+
+    // 3. Queue bindings
+    for binding in await topologyRegistry.allQueueBindings() {
+      if let f = filter?.queueBindingFilter, !f(binding) { continue }
+      do {
+        try await channel.queueBindWithoutRecording(
+          queue: binding.queue,
+          exchange: binding.exchange,
+          routingKey: binding.routingKey,
+          arguments: binding.arguments
+        )
+      } catch {}
+    }
+
+    // 4. Exchange bindings
+    for binding in await topologyRegistry.allExchangeBindings() {
+      if let f = filter?.exchangeBindingFilter, !f(binding) { continue }
+      do {
+        try await channel.exchangeBindWithoutRecording(
+          destination: binding.destination,
+          source: binding.source,
+          routingKey: binding.routingKey,
+          arguments: binding.arguments
+        )
+      } catch {}
+    }
+
+    // 5. Consumers (each channel recovers its own, respecting filter)
+    for (_, ch) in channels {
+      let tagChanges = await ch.recoverOwnConsumers(
+        from: topologyRegistry, filter: filter?.consumerFilter)
+      for (oldTag, newTag) in tagChanges {
+        for handler in onConsumerTagChangeHandlers {
+          await handler(oldTag, newTag)
+        }
+      }
     }
   }
 
@@ -207,10 +427,35 @@ public actor Connection {
     onCloseHandlers.append(handler)
   }
 
+  /// Register a handler called after successful automatic recovery.
+  public func onRecovery(_ handler: @escaping @Sendable () async -> Void) {
+    onRecoveryHandlers.append(handler)
+  }
+
+  /// Register a handler called when recovery fails permanently (max attempts exceeded).
+  public func onRecoveryFailure(_ handler: @escaping @Sendable (any Error) async -> Void) {
+    onRecoveryFailureHandlers.append(handler)
+  }
+
+  /// Register a handler called when a server-named queue gets a new name after recovery.
+  public func onQueueNameChange(
+    _ handler: @escaping @Sendable (_ oldName: String, _ newName: String) async -> Void
+  ) {
+    onQueueNameChangeHandlers.append(handler)
+  }
+
+  /// Register a handler called when a consumer tag changes after recovery.
+  public func onConsumerTagChange(
+    _ handler: @escaping @Sendable (_ oldTag: String, _ newTag: String) async -> Void
+  ) {
+    onConsumerTagChangeHandlers.append(handler)
+  }
+
   // MARK: - Close
 
   public func close() async throws {
     guard isOpen else { return }
+    closedByClient = true
     isOpen = false
 
     for channel in channels.values {
@@ -229,4 +474,8 @@ public actor Connection {
   public var frameMax: UInt32 { negotiatedParams?.frameMax ?? FrameDefaults.maxSize }
   public var heartbeat: UInt16 { negotiatedParams?.heartbeat ?? 60 }
   public var channelMax: UInt16 { negotiatedParams?.channelMax ?? 2047 }
+  public var connectionName: String? { configuration.connectionName }
+
+  /// The endpoint this connection last connected to.
+  public var currentEndpoint: Endpoint { resolvedEndpoints[endpointIndex] }
 }

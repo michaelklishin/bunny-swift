@@ -319,7 +319,7 @@ struct QueueIntegrationTests {
     }
 
     // Give the server a moment
-    try await Task.sleep(nanoseconds: 100_000_000)
+    try await Task.sleep(for: .milliseconds(100))
 
     let purgedCount = try await queue.purge()
     #expect(purgedCount >= 0)

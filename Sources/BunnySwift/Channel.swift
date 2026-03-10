@@ -8,6 +8,7 @@
 @_exported import AMQPProtocol
 import Foundation
 import NIO
+import Recovery
 @_exported import Transport
 
 /// Type alias to disambiguate from Objective-C Method
@@ -19,6 +20,11 @@ public actor Channel {
   private var isOpen = false
   private var confirmMode = false
   private var transactionMode = false
+
+  // QoS settings (recorded for recovery)
+  private var prefetchCount: UInt16 = 0
+  private var prefetchSize: UInt32 = 0
+  private var prefetchGlobal: Bool = false
 
   // Pending RPC responses
   private var pendingResponses: [CheckedContinuation<AMQPMethod, Error>] = []
@@ -33,6 +39,9 @@ public actor Channel {
 
   // Channel close event handlers
   private var closeHandlers: [@Sendable (ChannelCloseInfo) -> Void] = []
+
+  // Channel recovery event handlers
+  private var recoveryHandlers: [@Sendable () async -> Void] = []
 
   // Publisher confirms
   private var nextPublishSeqNo: UInt64 = 1
@@ -84,6 +93,17 @@ public actor Channel {
     guard case .exchangeDeclareOk = response else {
       throw ConnectionError.protocolError("Expected Exchange.DeclareOk, got \(response)")
     }
+
+    await connection?.topologyRegistry.recordExchange(
+      RecordedExchange(
+        name: name,
+        type: type.rawValue,
+        durable: durable,
+        autoDelete: autoDelete,
+        internal: `internal`,
+        arguments: arguments
+      ))
+
     return Exchange(channel: self, name: name, type: type)
   }
 
@@ -127,9 +147,29 @@ public actor Channel {
     guard case .exchangeDeleteOk = response else {
       throw ConnectionError.protocolError("Expected Exchange.DeleteOk, got \(response)")
     }
+
+    await connection?.topologyRegistry.deleteExchange(named: name)
   }
 
   public func exchangeBind(
+    destination: String,
+    source: String,
+    routingKey: String = "",
+    arguments: Table = [:]
+  ) async throws {
+    try await exchangeBindWithoutRecording(
+      destination: destination, source: source, routingKey: routingKey, arguments: arguments)
+
+    await connection?.topologyRegistry.recordExchangeBinding(
+      RecordedExchangeBinding(
+        destination: destination,
+        source: source,
+        routingKey: routingKey,
+        arguments: arguments
+      ))
+  }
+
+  internal func exchangeBindWithoutRecording(
     destination: String,
     source: String,
     routingKey: String = "",
@@ -169,6 +209,14 @@ public actor Channel {
     guard case .exchangeUnbindOk = response else {
       throw ConnectionError.protocolError("Expected Exchange.UnbindOk, got \(response)")
     }
+
+    await connection?.topologyRegistry.deleteExchangeBinding(
+      RecordedExchangeBinding(
+        destination: destination,
+        source: source,
+        routingKey: routingKey,
+        arguments: arguments
+      ))
   }
 
   // MARK: - Queue Operations
@@ -200,6 +248,18 @@ public actor Channel {
     guard case .queueDeclareOk(let ok) = response else {
       throw ConnectionError.protocolError("Expected Queue.DeclareOk, got \(response)")
     }
+
+    let serverNamed = name.isEmpty
+    await connection?.topologyRegistry.recordQueue(
+      RecordedQueue(
+        name: ok.queue,
+        durable: durable,
+        exclusive: exclusive,
+        autoDelete: autoDelete,
+        arguments: args,
+        serverNamed: serverNamed
+      ))
+
     return Queue(
       channel: self, name: ok.queue, messageCount: ok.messageCount, consumerCount: ok.consumerCount)
   }
@@ -221,6 +281,9 @@ public actor Channel {
     guard case .queueDeleteOk(let ok) = response else {
       throw ConnectionError.protocolError("Expected Queue.DeleteOk, got \(response)")
     }
+
+    await connection?.topologyRegistry.deleteQueue(named: name)
+
     return ok.messageCount
   }
 
@@ -235,6 +298,24 @@ public actor Channel {
   }
 
   public func queueBind(
+    queue: String,
+    exchange: String,
+    routingKey: String = "",
+    arguments: Table = [:]
+  ) async throws {
+    try await queueBindWithoutRecording(
+      queue: queue, exchange: exchange, routingKey: routingKey, arguments: arguments)
+
+    await connection?.topologyRegistry.recordQueueBinding(
+      RecordedQueueBinding(
+        queue: queue,
+        exchange: exchange,
+        routingKey: routingKey,
+        arguments: arguments
+      ))
+  }
+
+  internal func queueBindWithoutRecording(
     queue: String,
     exchange: String,
     routingKey: String = "",
@@ -273,6 +354,14 @@ public actor Channel {
     guard case .queueUnbindOk = response else {
       throw ConnectionError.protocolError("Expected Queue.UnbindOk, got \(response)")
     }
+
+    await connection?.topologyRegistry.deleteQueueBinding(
+      RecordedQueueBinding(
+        queue: queue,
+        exchange: exchange,
+        routingKey: routingKey,
+        arguments: arguments
+      ))
   }
 
   // MARK: - Publishing
@@ -293,7 +382,6 @@ public actor Channel {
       throw ConnectionError.notConnected
     }
 
-    // Wait for a slot if we're at the limit
     if publisherConfirmationTracking {
       await waitForConfirmSlot()
     }
@@ -336,7 +424,6 @@ public actor Channel {
       throw ConnectionError.notConnected
     }
 
-    // Wait for a slot if we're at the limit
     if publisherConfirmationTracking {
       await waitForConfirmSlot()
     }
@@ -461,6 +548,16 @@ public actor Channel {
 
     let (stream, continuation) = AsyncStream<Message>.makeStream()
     consumers[ok.consumerTag] = continuation
+
+    await connection?.topologyRegistry.recordConsumer(
+      RecordedConsumer(
+        consumerTag: ok.consumerTag,
+        queue: queue,
+        acknowledgementMode: acknowledgementMode,
+        exclusive: exclusive,
+        arguments: arguments
+      ))
+
     return MessageStream(channel: self, consumerTag: ok.consumerTag, stream: stream)
   }
 
@@ -472,6 +569,8 @@ public actor Channel {
       throw ConnectionError.protocolError("Expected Basic.CancelOk, got \(response)")
     }
     removeConsumer(consumerTag)
+
+    await connection?.topologyRegistry.deleteConsumer(tag: consumerTag)
   }
 
   /// Synchronously fetch a single message from a queue (pull API).
@@ -530,6 +629,10 @@ public actor Channel {
     guard case .basicQosOk = response else {
       throw ConnectionError.protocolError("Expected Basic.QosOk, got \(response)")
     }
+
+    self.prefetchSize = prefetchSize
+    self.prefetchCount = prefetchCount
+    self.prefetchGlobal = global
   }
 
   // MARK: - Publisher Confirms
@@ -566,7 +669,7 @@ public actor Channel {
   public func waitForConfirms() async throws {
     guard confirmMode else { return }
     while !confirmHandlers.isEmpty {
-      try await Task.sleep(nanoseconds: 10_000_000)  // 10ms
+      try await Task.sleep(for: .milliseconds(10))
     }
   }
 
@@ -605,9 +708,21 @@ public actor Channel {
 
   // MARK: - Channel Close Events
 
-  /// Register a handler for channel close events (server or client initiated)
+  /// Register a handler for channel close events (server or client initiated).
   public func onClose(_ handler: @escaping @Sendable (ChannelCloseInfo) -> Void) {
     closeHandlers.append(handler)
+  }
+
+  /// Register a handler called after this channel is recovered.
+  public func onRecovery(_ handler: @escaping @Sendable () async -> Void) {
+    recoveryHandlers.append(handler)
+  }
+
+  /// Invoke channel recovery handlers.
+  internal func notifyRecovered() async {
+    for handler in recoveryHandlers {
+      await handler()
+    }
   }
 
   // MARK: - Frame Handling
@@ -659,7 +774,6 @@ public actor Channel {
         classID: close.classId,
         methodID: close.methodId
       )
-      // Notify close handlers
       let closeInfo = ChannelCloseInfo(
         replyCode: close.replyCode,
         replyText: close.replyText,
@@ -735,6 +849,10 @@ public actor Channel {
       let cancelOk = BasicCancelOk(consumerTag: cancel.consumerTag)
       try? await sendMethod(.basicCancelOk(cancelOk))
 
+      // An auto-delete queue's last consumer was cancelled by the server.
+      // Remove the consumer from topology so it won't be recovered.
+      await connection?.topologyRegistry.deleteConsumer(tag: cancel.consumerTag)
+
     default:
       break
     }
@@ -804,6 +922,188 @@ public actor Channel {
         let waiter = confirmLimitWaiters.removeFirst()
         waiter.resume()
       }
+    }
+  }
+
+  // MARK: - Recovery
+
+  /// Fail all pending RPCs on connection loss.
+  /// Consumer continuations are kept alive so `for await` loops
+  /// resume transparently after recovery.
+  internal func handleConnectionLost() {
+    let error = ConnectionError.notConnected
+    for cont in pendingResponses {
+      cont.resume(throwing: error)
+    }
+    pendingResponses.removeAll()
+    for cont in pendingGetResponses {
+      cont.resume(throwing: error)
+    }
+    pendingGetResponses.removeAll()
+    for (_, cont) in confirmHandlers {
+      cont.resume(throwing: error)
+    }
+    confirmHandlers.removeAll()
+    for waiter in confirmLimitWaiters {
+      waiter.resume()
+    }
+    confirmLimitWaiters.removeAll()
+    outstandingConfirmsCount = 0
+    isOpen = false
+    incomingMessage = nil
+  }
+
+  /// Finish all consumer streams permanently. Called when
+  /// recovery is disabled or all retry attempts are exhausted.
+  internal func terminateConsumers() {
+    for continuation in consumers.values {
+      continuation.finish()
+    }
+    consumers.removeAll()
+  }
+
+  internal func recoverOnNewConnection() async throws {
+    // Clear any pending state from a previous failed recovery attempt
+    let error = ConnectionError.notConnected
+    for cont in pendingResponses { cont.resume(throwing: error) }
+    pendingResponses.removeAll()
+    for cont in pendingGetResponses { cont.resume(throwing: error) }
+    pendingGetResponses.removeAll()
+
+    try await open()
+
+    // Restore QoS
+    if prefetchCount > 0 || prefetchSize > 0 {
+      let qos = BasicQos(
+        prefetchSize: prefetchSize, prefetchCount: prefetchCount, global: prefetchGlobal)
+      try await sendMethod(.basicQos(qos))
+      let response = try await waitForResponse()
+      guard case .basicQosOk = response else {
+        throw ConnectionError.protocolError("Expected Basic.QosOk during recovery")
+      }
+    }
+
+    // Restore publisher confirms
+    if confirmMode {
+      let select = ConfirmSelect(noWait: false)
+      try await sendMethod(.confirmSelect(select))
+      let response = try await waitForResponse()
+      guard case .confirmSelectOk = response else {
+        throw ConnectionError.protocolError("Expected Confirm.SelectOk during recovery")
+      }
+      nextPublishSeqNo = 1
+    }
+
+    // Restore transaction mode
+    if transactionMode {
+      try await sendMethod(.txSelect)
+      let response = try await waitForResponse()
+      guard case .txSelectOk = response else {
+        throw ConnectionError.protocolError("Expected Tx.SelectOk during recovery")
+      }
+    }
+  }
+
+  internal func redeclareExchange(_ exchange: RecordedExchange) async throws {
+    let declare = ExchangeDeclare(
+      reserved1: 0,
+      exchange: exchange.name,
+      type: exchange.type,
+      passive: false,
+      durable: exchange.durable,
+      autoDelete: exchange.autoDelete,
+      internal: exchange.internal,
+      noWait: false,
+      arguments: exchange.arguments
+    )
+    try await sendMethod(.exchangeDeclare(declare))
+    let response = try await waitForResponse()
+    guard case .exchangeDeclareOk = response else {
+      throw ConnectionError.protocolError("Expected Exchange.DeclareOk during recovery")
+    }
+  }
+
+  internal func redeclareQueue(_ queue: RecordedQueue) async throws -> String {
+    let nameForRecovery = queue.serverNamed ? "" : queue.name
+    let declare = QueueDeclare(
+      reserved1: 0,
+      queue: nameForRecovery,
+      passive: false,
+      durable: queue.durable,
+      exclusive: queue.exclusive,
+      autoDelete: queue.autoDelete,
+      noWait: false,
+      arguments: queue.arguments
+    )
+    try await sendMethod(.queueDeclare(declare))
+    let response = try await waitForResponse()
+    guard case .queueDeclareOk(let ok) = response else {
+      throw ConnectionError.protocolError("Expected Queue.DeclareOk during recovery")
+    }
+    return ok.queue
+  }
+
+  /// Re-register this channel's consumers on the server.
+  /// Returns (oldTag, newTag) pairs for any tags that changed.
+  internal func recoverOwnConsumers(
+    from registry: TopologyRegistry,
+    filter: (@Sendable (RecordedConsumer) -> Bool)? = nil
+  ) async -> [(String, String)] {
+    var tagChanges: [(String, String)] = []
+    // Snapshot keys to avoid mutating the dictionary during iteration
+    let tags = Array(consumers.keys)
+    for tag in tags {
+      guard let recorded = await registry.consumer(forTag: tag) else { continue }
+      if let filter, !filter(recorded) { continue }
+      if let change = await recoverConsumer(recorded) {
+        tagChanges.append(change)
+      }
+    }
+    return tagChanges
+  }
+
+  /// Re-register a single consumer, reusing the existing continuation
+  /// so the caller's `for await` loop resumes transparently.
+  private func recoverConsumer(_ recorded: RecordedConsumer) async -> (String, String)? {
+    let consume = BasicConsume(
+      reserved1: 0,
+      queue: recorded.queue,
+      consumerTag: recorded.consumerTag,
+      noLocal: false,
+      noAck: recorded.acknowledgementMode.noAckFieldValue,
+      exclusive: recorded.exclusive,
+      noWait: false,
+      arguments: recorded.arguments
+    )
+
+    do {
+      try await sendMethod(.basicConsume(consume))
+      let response = try await waitForResponse()
+      guard case .basicConsumeOk(let ok) = response else { return nil }
+
+      if ok.consumerTag != recorded.consumerTag {
+        // Server assigned a different tag; move the continuation
+        if let continuation = consumers.removeValue(forKey: recorded.consumerTag) {
+          consumers[ok.consumerTag] = continuation
+        }
+        await connection?.topologyRegistry.deleteConsumer(tag: recorded.consumerTag)
+        await connection?.topologyRegistry.recordConsumer(
+          RecordedConsumer(
+            consumerTag: ok.consumerTag,
+            queue: recorded.queue,
+            acknowledgementMode: recorded.acknowledgementMode,
+            exclusive: recorded.exclusive,
+            arguments: recorded.arguments
+          ))
+        return (recorded.consumerTag, ok.consumerTag)
+      }
+      return nil
+    } catch {
+      // Consumer recovery failure: terminate its stream
+      if let continuation = consumers.removeValue(forKey: recorded.consumerTag) {
+        continuation.finish()
+      }
+      return nil
     }
   }
 

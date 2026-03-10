@@ -11,6 +11,19 @@ import NIO
 import NIOFoundationCompat
 import NIOSSL
 
+// MARK: - Endpoint
+
+/// A host-port pair for connecting to a RabbitMQ node.
+public struct Endpoint: Sendable, Equatable, Hashable {
+  public let host: String
+  public let port: Int
+
+  public init(host: String, port: Int = 5672) {
+    self.host = host
+    self.port = port
+  }
+}
+
 // MARK: - Connection Configuration
 
 /// Configuration for AMQP connection
@@ -27,6 +40,15 @@ public struct ConnectionConfiguration: Sendable {
   public var connectionTimeout: TimeAmount
   public var connectionName: String?
 
+  /// Multiple endpoints for failover. When non-empty, these are used instead
+  /// of `host`/`port`. During initial connection and recovery, endpoints are
+  /// tried in sequence until one succeeds.
+  public var endpoints: [Endpoint]
+
+  /// Whether to shuffle the endpoint list on connection creation.
+  /// Shuffling distributes clients across cluster nodes. Enabled by default.
+  public var shuffleEndpoints: Bool
+
   /// Write buffering: number of frames before forcing a flush (lower = better latency)
   public var writeBufferFlushThreshold: Int
   /// Write buffering: max time before flushing pending writes
@@ -35,6 +57,28 @@ public struct ConnectionConfiguration: Sendable {
   /// Socket options that may require elevated permissions in some environments
   public var enableTCPNoDelay: Bool
   public var enableTCPKeepAlive: Bool
+
+  /// Whether automatic connection recovery is enabled.
+  /// When true, the connection will automatically reconnect and restore topology
+  /// after network failures, heartbeat timeouts, or server-initiated closes.
+  /// Enabled by default.
+  public var automaticRecovery: Bool
+
+  /// Delay before the first recovery attempt (in seconds).
+  public var networkRecoveryInterval: TimeInterval
+
+  /// Maximum number of recovery attempts (nil for unlimited).
+  public var maxRecoveryAttempts: Int?
+
+  /// Multiplier for exponential backoff between recovery attempts.
+  public var recoveryBackoffMultiplier: Double
+
+  /// Maximum delay between recovery attempts (in seconds).
+  public var maxRecoveryInterval: TimeInterval
+
+  /// Whether topology recovery (exchanges, queues, bindings, consumers) is enabled.
+  /// Only applies when automaticRecovery is true.
+  public var topologyRecovery: Bool
 
   public init(
     host: String = "localhost",
@@ -48,10 +92,18 @@ public struct ConnectionConfiguration: Sendable {
     channelMax: UInt16 = 2047,
     connectionTimeout: TimeAmount = .seconds(30),
     connectionName: String? = nil,
+    endpoints: [Endpoint] = [],
+    shuffleEndpoints: Bool = true,
     writeBufferFlushThreshold: Int = 64,
     writeBufferFlushInterval: TimeAmount = .milliseconds(1),
     enableTCPNoDelay: Bool = true,
-    enableTCPKeepAlive: Bool = true
+    enableTCPKeepAlive: Bool = true,
+    automaticRecovery: Bool = true,
+    networkRecoveryInterval: TimeInterval = 5.0,
+    maxRecoveryAttempts: Int? = nil,
+    recoveryBackoffMultiplier: Double = 2.0,
+    maxRecoveryInterval: TimeInterval = 60.0,
+    topologyRecovery: Bool = true
   ) {
     self.host = host
     self.port = port
@@ -64,10 +116,18 @@ public struct ConnectionConfiguration: Sendable {
     self.channelMax = channelMax
     self.connectionTimeout = connectionTimeout
     self.connectionName = connectionName
+    self.endpoints = endpoints
+    self.shuffleEndpoints = shuffleEndpoints
     self.writeBufferFlushThreshold = writeBufferFlushThreshold
     self.writeBufferFlushInterval = writeBufferFlushInterval
     self.enableTCPNoDelay = enableTCPNoDelay
     self.enableTCPKeepAlive = enableTCPKeepAlive
+    self.automaticRecovery = automaticRecovery
+    self.networkRecoveryInterval = networkRecoveryInterval
+    self.maxRecoveryAttempts = maxRecoveryAttempts
+    self.recoveryBackoffMultiplier = recoveryBackoffMultiplier
+    self.maxRecoveryInterval = maxRecoveryInterval
+    self.topologyRecovery = topologyRecovery
   }
 
   /// Create configuration from AMQP URI

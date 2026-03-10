@@ -6,4 +6,5 @@
 // Copyright (c) 2025-2026 Michael S. Klishin
 
 @_exported import AMQPProtocol
+@_exported import Recovery
 @_exported import Transport

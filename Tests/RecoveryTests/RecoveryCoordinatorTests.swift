@@ -73,7 +73,7 @@ struct RecoveryCoordinatorTests {
     )
 
     // Give it a moment
-    try await Task.sleep(nanoseconds: 50_000_000)
+    try await Task.sleep(for: .milliseconds(50))
 
     #expect(await reconnectCalled.get() == false)
   }
@@ -145,7 +145,7 @@ struct RecoveryCoordinatorTests {
     )
 
     // Wait for recovery to complete
-    try await Task.sleep(nanoseconds: 100_000_000)
+    try await Task.sleep(for: .milliseconds(100))
 
     #expect(await attemptNumber.get() == 1)
   }
@@ -176,7 +176,7 @@ struct RecoveryCoordinatorTests {
     )
 
     // Wait for recovery to complete
-    try await Task.sleep(nanoseconds: 100_000_000)
+    try await Task.sleep(for: .milliseconds(100))
 
     #expect(await didComplete.get() == true)
 
@@ -215,7 +215,7 @@ struct RecoveryCoordinatorTests {
     )
 
     // Wait for recovery attempts to complete
-    try await Task.sleep(nanoseconds: 200_000_000)
+    try await Task.sleep(for: .milliseconds(200))
 
     #expect(await failedError.get() != nil)
 
@@ -257,7 +257,7 @@ struct RecoveryCoordinatorTests {
     )
 
     // Wait for recovery
-    try await Task.sleep(nanoseconds: 100_000_000)
+    try await Task.sleep(for: .milliseconds(100))
 
     #expect(await topologyBegan.get() == true)
     #expect(await topologyComplete.get() == true)

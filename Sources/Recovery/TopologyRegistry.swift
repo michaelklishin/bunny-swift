@@ -41,7 +41,7 @@ public struct RecordedQueue: Sendable, Equatable, Hashable {
   public let exclusive: Bool
   public let autoDelete: Bool
   public let arguments: Table
-  public var serverNamed: Bool
+  public let serverNamed: Bool
 
   public init(
     name: String,
@@ -129,7 +129,6 @@ public actor TopologyRegistry {
 
   public func deleteExchange(named name: String) {
     exchanges.removeValue(forKey: name)
-    // Remove bindings involving this exchange
     queueBindings = queueBindings.filter { $0.exchange != name }
     exchangeBindings = exchangeBindings.filter {
       $0.source != name && $0.destination != name
@@ -148,9 +147,13 @@ public actor TopologyRegistry {
 
   public func deleteQueue(named name: String) {
     queues.removeValue(forKey: name)
-    // Remove bindings involving this queue
-    queueBindings = queueBindings.filter { $0.queue != name }
-    // Remove consumers for this queue
+    // Cascade: remove bindings targeting this queue and auto-delete exchanges
+    // that lose their last binding as a result (rabbitmq/rabbitmq-dotnet-client#1905)
+    let removedBindings = queueBindings.filter { $0.queue == name }
+    queueBindings.subtract(removedBindings)
+    for binding in removedBindings {
+      maybeDeleteAutoDeleteExchange(binding.exchange)
+    }
     consumers = consumers.filter { $0.value.queue != name }
   }
 
@@ -158,18 +161,17 @@ public actor TopologyRegistry {
     Array(queues.values)
   }
 
-  /// Update queue name after server-named queue is redeclared
+  /// Update queue name after server-named queue is redeclared.
   public func updateQueueName(from oldName: String, to newName: String) {
-    guard var queue = queues.removeValue(forKey: oldName) else { return }
-    queue = RecordedQueue(
+    guard let oldQueue = queues.removeValue(forKey: oldName) else { return }
+    queues[newName] = RecordedQueue(
       name: newName,
-      durable: queue.durable,
-      exclusive: queue.exclusive,
-      autoDelete: queue.autoDelete,
-      arguments: queue.arguments,
-      serverNamed: queue.serverNamed
+      durable: oldQueue.durable,
+      exclusive: oldQueue.exclusive,
+      autoDelete: oldQueue.autoDelete,
+      arguments: oldQueue.arguments,
+      serverNamed: oldQueue.serverNamed
     )
-    queues[newName] = queue
 
     // Update bindings
     let oldBindings = queueBindings.filter { $0.queue == oldName }
@@ -204,6 +206,7 @@ public actor TopologyRegistry {
 
   public func deleteQueueBinding(_ binding: RecordedQueueBinding) {
     queueBindings.remove(binding)
+    maybeDeleteAutoDeleteExchange(binding.exchange)
   }
 
   public func allQueueBindings() -> [RecordedQueueBinding] {
@@ -218,6 +221,7 @@ public actor TopologyRegistry {
 
   public func deleteExchangeBinding(_ binding: RecordedExchangeBinding) {
     exchangeBindings.remove(binding)
+    maybeDeleteAutoDeleteExchange(binding.source)
   }
 
   public func allExchangeBindings() -> [RecordedExchangeBinding] {
@@ -231,7 +235,8 @@ public actor TopologyRegistry {
   }
 
   public func deleteConsumer(tag: String) {
-    consumers.removeValue(forKey: tag)
+    guard let consumer = consumers.removeValue(forKey: tag) else { return }
+    maybeDeleteAutoDeleteQueue(consumer.queue)
   }
 
   public func allConsumers() -> [RecordedConsumer] {
@@ -240,6 +245,33 @@ public actor TopologyRegistry {
 
   public func consumer(forTag tag: String) -> RecordedConsumer? {
     consumers[tag]
+  }
+
+  // MARK: - Auto-Delete Cascading
+
+  /// If the queue is auto-delete and has no remaining consumers, remove it
+  /// and cascade to its bindings and their source exchanges.
+  private func maybeDeleteAutoDeleteQueue(_ queueName: String) {
+    guard let queue = queues[queueName], queue.autoDelete else { return }
+    let hasConsumers = consumers.values.contains { $0.queue == queueName }
+    if !hasConsumers {
+      deleteQueue(named: queueName)
+    }
+  }
+
+  /// If the exchange is auto-delete and has no remaining bindings where it is
+  /// the source, remove it and its related bindings from the recorded topology.
+  private func maybeDeleteAutoDeleteExchange(_ exchangeName: String) {
+    guard let exchange = exchanges[exchangeName], exchange.autoDelete else { return }
+    let hasQueueBindings = queueBindings.contains { $0.exchange == exchangeName }
+    let hasExchangeBindings = exchangeBindings.contains { $0.source == exchangeName }
+    if !hasQueueBindings && !hasExchangeBindings {
+      // Also remove e2e bindings where this exchange is the destination.
+      exchanges.removeValue(forKey: exchangeName)
+      exchangeBindings = exchangeBindings.filter {
+        $0.source != exchangeName && $0.destination != exchangeName
+      }
+    }
   }
 
   // MARK: - Clear
