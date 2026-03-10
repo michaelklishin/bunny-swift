@@ -1,5 +1,11 @@
 ## 0.11.0 (in development)
 
+### Enhancements
+
+ * Finished connection recovery integration. The feature is heavily inspired by Ruby Bunny 3.x,
+   Java and .NET AMQP 0-9-1 clients
+ * Support for multiple connection endpoints
+
 ### Bug Fixes
 
  * `TCP_NODELAY` socket option was set at `SOL_SOCKET` level instead of `IPPROTO_TCP`, causing connection failures on Linux
