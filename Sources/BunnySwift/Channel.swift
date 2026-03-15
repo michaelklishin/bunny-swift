@@ -735,7 +735,12 @@ public actor Channel {
       if var msg = incomingMessage {
         msg.properties = properties
         msg.bodySize = bodySize
-        incomingMessage = msg
+        if bodySize == 0 {
+            await deliverMessage(msg)
+            incomingMessage = nil
+        } else {
+            incomingMessage = msg
+        }
       }
     case .body(channelID: _, payload: let chunk):
       if var msg = incomingMessage {
