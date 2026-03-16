@@ -54,7 +54,7 @@ private func closeAllConnectionsWithName(
     }
     if !matching.isEmpty {
       for conn in matching {
-        try await httpAPI.closeConnection(conn.name, reason: "Closed by test")
+        try await httpAPI.closeConnection(conn.name, reason: "Closed by a test via the HTTP API")
       }
       return
     }
