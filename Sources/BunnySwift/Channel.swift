@@ -221,6 +221,13 @@ public actor Channel {
 
   // MARK: - Queue Operations
 
+  /// Declares a server-named, exclusive queue.
+  public func temporaryQueue(
+    arguments: Table = [:]
+  ) async throws -> Queue {
+    try await queue("", exclusive: true, arguments: arguments)
+  }
+
   public func queue(
     _ name: String = "",
     type: QueueType? = nil,
@@ -484,7 +491,7 @@ public actor Channel {
     frameMax: UInt32
   ) -> [Frame] {
     let maxBodySize = Int(frameMax) - 8
-    let bodyFrameCount = body.isEmpty ? 1 : (body.count + maxBodySize - 1) / maxBodySize
+    let bodyFrameCount = body.isEmpty ? 0 : (body.count + maxBodySize - 1) / maxBodySize
     var frames: [Frame] = []
     frames.reserveCapacity(2 + bodyFrameCount)
 
@@ -505,16 +512,19 @@ public actor Channel {
         properties: properties
       ))
 
-    if body.count <= maxBodySize {
-      // Fast path: body fits in single frame, no copy needed
-      frames.append(.body(channelID: channelID, payload: body))
-    } else {
-      // Chunked: split into multiple frames
-      var offset = 0
-      while offset < body.count {
-        let end = min(offset + maxBodySize, body.count)
-        frames.append(.body(channelID: channelID, payload: body[offset..<end]))
-        offset = end
+    // AMQP 0-9-1: no body frames when bodySize is zero
+    if !body.isEmpty {
+      if body.count <= maxBodySize {
+        // Fast path: body fits in single frame, no copy needed
+        frames.append(.body(channelID: channelID, payload: body))
+      } else {
+        // Chunked: split into multiple frames
+        var offset = 0
+        while offset < body.count {
+          let end = min(offset + maxBodySize, body.count)
+          frames.append(.body(channelID: channelID, payload: body[offset..<end]))
+          offset = end
+        }
       }
     }
 
@@ -735,14 +745,17 @@ public actor Channel {
       if var msg = incomingMessage {
         msg.properties = properties
         msg.bodySize = bodySize
-        incomingMessage = msg
+        if bodySize == 0 {
+          await completeMessage(msg)
+        } else {
+          incomingMessage = msg
+        }
       }
     case .body(channelID: _, payload: let chunk):
       if var msg = incomingMessage {
         msg.appendBody(chunk)
         if UInt64(msg.receivedBytes) >= msg.bodySize {
-          await deliverMessage(msg)
-          incomingMessage = nil
+          await completeMessage(msg)
         } else {
           incomingMessage = msg
         }
@@ -856,6 +869,12 @@ public actor Channel {
     default:
       break
     }
+  }
+
+  /// Delivers a fully assembled message and clears the incoming message slot.
+  private func completeMessage(_ msg: IncomingMessage) async {
+    await deliverMessage(msg)
+    incomingMessage = nil
   }
 
   private func deliverMessage(_ incoming: IncomingMessage) async {

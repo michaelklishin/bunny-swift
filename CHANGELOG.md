@@ -1,6 +1,10 @@
 ## 0.12.0 (in development)
 
-No changes yet.
+### Bug Fixes
+
+ * Consumer did not receive messages published with an empty body. 
+ 
+   GitHub issue: [#13](https://github.com/michaelklishin/bunny-swift/issues/13)
 
 
 ## 0.11.0 (Mar 9, 2026)
