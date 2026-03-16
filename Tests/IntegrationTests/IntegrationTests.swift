@@ -245,7 +245,7 @@ struct ChannelIntegrationTests {
 
     let messageBody = "withChannel test"
     let received = try await connection.withChannel { channel in
-      let queue = try await channel.queue("", exclusive: true)
+      let queue = try await channel.temporaryQueue()
       try await queue.publish(messageBody)
       let response = try await queue.get(acknowledgementMode: .automatic)
       _ = try await queue.delete()
@@ -283,7 +283,7 @@ struct QueueIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     #expect(!queue.name.isEmpty)
     #expect(queue.name.hasPrefix("amq.gen-"))
@@ -311,7 +311,7 @@ struct QueueIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     // Publish some messages
     for i in 0..<5 {
@@ -389,7 +389,7 @@ struct BindingIntegrationTests {
     let channel = try await connection.openChannel()
     let exchangeName = "bunnyswift.bind.\(UUID().uuidString)"
     let exchange = try await channel.direct(exchangeName, autoDelete: true)
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     _ = try await queue.bind(to: exchange, routingKey: "test.key")
 
@@ -412,7 +412,7 @@ struct PublishConsumeIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     let messageBody = "Hello, BunnySwift!"
     try await queue.publish(messageBody)
@@ -431,7 +431,7 @@ struct PublishConsumeIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     let properties = BasicProperties.persistent
       .withContentType("text/plain")
@@ -447,13 +447,51 @@ struct PublishConsumeIntegrationTests {
     _ = try await queue.delete()
   }
 
+  @Test("Publish and get empty-body message", .timeLimit(.minutes(1)))
+  func publishAndGetEmptyBody() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    try await queue.publish(Data())
+
+    let response = try await queue.get(acknowledgementMode: .automatic)
+    #expect(response != nil)
+    #expect(response?.body == Data())
+
+    _ = try await queue.delete()
+  }
+
+  @Test("Consume empty-body message via async stream", .timeLimit(.minutes(1)))
+  func consumeEmptyBodyViaStream() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    let stream = try await queue.consume(acknowledgementMode: .automatic)
+
+    try await queue.publish(Data())
+
+    for try await msg in stream {
+      #expect(msg.body == Data())
+      break
+    }
+
+    try await stream.cancel()
+    _ = try await queue.delete()
+  }
+
   @Test("Consume with async stream", .timeLimit(.minutes(1)))
   func consumeWithAsyncStream() async throws {
     let connection = try await TestConfig.openConnection()
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     // Start consuming BEFORE publishing to avoid race condition
     let stream = try await queue.consume(acknowledgementMode: .automatic)
@@ -490,7 +528,7 @@ struct AcknowledgementIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     try await queue.publish("ack test")
 
@@ -512,7 +550,7 @@ struct AcknowledgementIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     try await queue.publish("nack test")
 
@@ -535,7 +573,7 @@ struct AcknowledgementIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     try await queue.publish("reject test")
 
@@ -579,7 +617,7 @@ struct TransactionIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     try await channel.txSelect()
     try await queue.publish("tx message")
@@ -598,7 +636,7 @@ struct TransactionIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     try await channel.txSelect()
     try await queue.publish("rollback message")
@@ -634,7 +672,7 @@ struct PublisherConfirmsIntegrationTests {
     defer { Task { try await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
 
     try await channel.confirmSelect()
 

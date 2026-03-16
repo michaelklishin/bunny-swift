@@ -292,7 +292,7 @@ struct RecoveryIntegrationTests {
       defer { Task { try? await connection.close() } }
 
       let channel = try await connection.openChannel()
-      let queue = try await channel.queue("", exclusive: true)
+      let queue = try await channel.temporaryQueue()
       let originalName = queue.name
       #expect(originalName.hasPrefix("amq.gen-"))
 
@@ -1051,7 +1051,7 @@ struct RecoveryIntegrationTests {
       defer { Task { try? await connection.close() } }
 
       let channel = try await connection.openChannel()
-      let queue = try await channel.queue("", exclusive: true)
+      let queue = try await channel.temporaryQueue()
       let originalName = queue.name
       #expect(originalName.hasPrefix("amq.gen-"))
 
@@ -1160,7 +1160,7 @@ struct RecoveryIntegrationTests {
       _ = try await channel.fanout(exchangeName, autoDelete: true)
       defer { Task { try? await channel.exchangeDelete(exchangeName) } }
 
-      let queue = try await channel.queue("", exclusive: true)
+      let queue = try await channel.temporaryQueue()
       try await channel.queueBind(queue: queue.name, exchange: exchangeName)
 
       try await closeAndWaitForRecovery(connection, name: name)
@@ -1261,7 +1261,7 @@ struct TopologyRecordingTests {
     defer { Task { try? await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
     defer { Task { _ = try? await queue.delete() } }
 
     let queues = await connection.topologyRegistry.allQueues()
@@ -1389,7 +1389,7 @@ struct TopologyRecordingTests {
     defer { Task { try? await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
     let stream = try await channel.basicConsume(
       queue: queue.name, acknowledgementMode: .manual, exclusive: true)
     defer {
@@ -1413,7 +1413,7 @@ struct TopologyRecordingTests {
     defer { Task { try? await connection.close() } }
 
     let channel = try await connection.openChannel()
-    let queue = try await channel.queue("", exclusive: true)
+    let queue = try await channel.temporaryQueue()
     let stream = try await channel.basicConsume(
       queue: queue.name, acknowledgementMode: .automatic)
     try await channel.basicCancel(stream.consumerTag)

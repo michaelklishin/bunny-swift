@@ -221,6 +221,13 @@ public actor Channel {
 
   // MARK: - Queue Operations
 
+  /// Declares a server-named, exclusive queue.
+  public func temporaryQueue(
+    arguments: Table = [:]
+  ) async throws -> Queue {
+    try await queue("", exclusive: true, arguments: arguments)
+  }
+
   public func queue(
     _ name: String = "",
     type: QueueType? = nil,
@@ -735,14 +742,17 @@ public actor Channel {
       if var msg = incomingMessage {
         msg.properties = properties
         msg.bodySize = bodySize
-        incomingMessage = msg
+        if bodySize == 0 {
+          await completeMessage(msg)
+        } else {
+          incomingMessage = msg
+        }
       }
     case .body(channelID: _, payload: let chunk):
       if var msg = incomingMessage {
         msg.appendBody(chunk)
         if UInt64(msg.receivedBytes) >= msg.bodySize {
-          await deliverMessage(msg)
-          incomingMessage = nil
+          await completeMessage(msg)
         } else {
           incomingMessage = msg
         }
@@ -856,6 +866,12 @@ public actor Channel {
     default:
       break
     }
+  }
+
+  /// Delivers a fully assembled message and clears the incoming message slot.
+  private func completeMessage(_ msg: IncomingMessage) async {
+    await deliverMessage(msg)
+    incomingMessage = nil
   }
 
   private func deliverMessage(_ incoming: IncomingMessage) async {
