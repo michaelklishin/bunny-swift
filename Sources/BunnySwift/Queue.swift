@@ -20,6 +20,11 @@ public enum QueueType: Sendable, Hashable {
   /// AMQP 0-9-1 clients such as BunnySwift can only use certain basic stream features;
   /// consider using a RabbitMQ Stream Protocol client instead.
   case stream
+  /// Tanzu RabbitMQ delayed queues: durable replicated queues with built-in
+  /// delayed delivery and retry semantics.
+  case delayed
+  /// Tanzu RabbitMQ JMS queues: durable replicated queues with JMS selector support.
+  case jms
   /// Custom or plugin-provided queue types.
   case custom(String)
 
@@ -29,6 +34,8 @@ public enum QueueType: Sendable, Hashable {
     case .classic: return "classic"
     case .quorum: return "quorum"
     case .stream: return "stream"
+    case .delayed: return "delayed"
+    case .jms: return "jms"
     case .custom(let value): return value
     }
   }
@@ -97,14 +104,19 @@ public struct Queue: Sendable {
     consumerTag: String = "",
     acknowledgementMode: ConsumerAcknowledgementMode = .manual,
     exclusive: Bool = false,
+    jmsSelector: String? = nil,
     arguments: Table = [:]
   ) async throws -> MessageStream {
-    try await channel.basicConsume(
+    var args = arguments
+    if let jmsSelector {
+      args[XArguments.jmsSelector] = .string(jmsSelector)
+    }
+    return try await channel.basicConsume(
       queue: name,
       consumerTag: consumerTag,
       acknowledgementMode: acknowledgementMode,
       exclusive: exclusive,
-      arguments: arguments
+      arguments: args
     )
   }
 

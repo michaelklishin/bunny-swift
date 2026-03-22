@@ -271,6 +271,56 @@ public actor Channel {
       channel: self, name: ok.queue, messageCount: ok.messageCount, consumerCount: ok.consumerCount)
   }
 
+  /// Declares a Tanzu RabbitMQ delayed queue (durable by default).
+  public func delayedQueue(
+    _ name: String,
+    retryType: DelayedRetryType? = nil,
+    retryMin: Duration? = nil,
+    retryMax: Duration? = nil,
+    consumerDisconnectedTimeout: Duration? = nil,
+    durable: Bool = true,
+    arguments: Table = [:]
+  ) async throws -> Queue {
+    var args = arguments
+    if let retryType {
+      args[XArguments.delayedRetryType] = retryType.asFieldValue
+    }
+    if let retryMin {
+      args[XArguments.delayedRetryMin] = .int64(durationToMillis(retryMin))
+    }
+    if let retryMax {
+      args[XArguments.delayedRetryMax] = .int64(durationToMillis(retryMax))
+    }
+    if let consumerDisconnectedTimeout {
+      args[XArguments.consumerDisconnectedTimeout] =
+        .int64(durationToMillis(consumerDisconnectedTimeout))
+    }
+    return try await queue(name, type: .delayed, durable: durable, arguments: args)
+  }
+
+  /// Declares a Tanzu RabbitMQ JMS queue (durable by default).
+  public func jmsQueue(
+    _ name: String,
+    selectorFields: [String]? = nil,
+    selectorFieldMaxBytes: Int? = nil,
+    consumerDisconnectedTimeout: Duration? = nil,
+    durable: Bool = true,
+    arguments: Table = [:]
+  ) async throws -> Queue {
+    var args = arguments
+    if let selectorFields {
+      args[XArguments.selectorFields] = .array(selectorFields.map { .string($0) })
+    }
+    if let selectorFieldMaxBytes {
+      args[XArguments.selectorFieldMaxBytes] = .int64(Int64(selectorFieldMaxBytes))
+    }
+    if let consumerDisconnectedTimeout {
+      args[XArguments.consumerDisconnectedTimeout] =
+        .int64(durationToMillis(consumerDisconnectedTimeout))
+    }
+    return try await queue(name, type: .jms, durable: durable, arguments: args)
+  }
+
   public func queueDelete(
     _ name: String,
     ifUnused: Bool = false,
@@ -1177,6 +1227,12 @@ public enum ExchangeType: String, Sendable {
   case fanout
   case topic
   case headers
+}
+
+/// Converts a `Duration` to milliseconds as `Int64` for AMQP 0-9-1 table values.
+private func durationToMillis(_ d: Duration) -> Int64 {
+  let (seconds, attoseconds) = d.components
+  return Int64(seconds) * 1_000 + Int64(attoseconds) / 1_000_000_000_000_000
 }
 
 private struct IncomingMessage {

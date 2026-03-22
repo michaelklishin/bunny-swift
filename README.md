@@ -84,6 +84,32 @@ let custom = try await channel.queue(
 )
 ```
 
+### Tanzu RabbitMQ Queue Types
+
+[Tanzu RabbitMQ](https://tanzu.vmware.com/rabbitmq) provides additional queue types.
+
+```swift
+// Delayed queue with retry on failed deliveries
+let delayed = try await channel.delayedQueue(
+    "delayed.with.retries",
+    retryType: .failed,
+    retryMin: .seconds(1),
+    retryMax: .seconds(60)
+)
+
+// JMS queue with selector support
+let jms = try await channel.jmsQueue(
+    "orders",
+    selectorFields: ["priority", "region"],
+    selectorFieldMaxBytes: 256
+)
+
+// Consume with a JMS selector expression
+let stream = try await jms.consume(
+    jmsSelector: "priority > 5 AND region = 'EU'"
+)
+```
+
 ### Publishing with Automatic Confirmation Tracking
 
 ```swift
@@ -124,6 +150,15 @@ try await queue.bind(to: exchange, routingKey: "events.#")
 
 // Or bind by exchange name
 try await queue.bind(to: "events", routingKey: "events.critical.*")
+
+// Headers exchange: route by message headers instead of routing key
+let hx = try await channel.headers("dispatch", durable: true)
+let urgentQueue = try await channel.queue("dispatch.urgent", durable: true)
+try await urgentQueue.bind(to: hx, arguments: [
+    XArguments.headersMatch: HeadersMatch.all.asFieldValue,
+    "priority": .string("high"),
+    "region": .string("EU"),
+])
 ```
 
 ### Consuming with Manual Acknowledgements

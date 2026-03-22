@@ -527,6 +527,46 @@ struct RabbitMQHeadersTests {
     #expect(decoded["x-queue-type"]?.stringValue == "quorum")
   }
 
+  @Test("delayed queue arguments round-trip through encoding")
+  func delayedQueueArguments() throws {
+    let table: Table = [
+      "x-queue-type": .string("delayed"),
+      "x-delayed-retry-type": .string("failed"),
+      "x-delayed-retry-min": .int64(1_000),
+      "x-delayed-retry-max": .int64(60_000),
+    ]
+    var encoder = WireEncoder()
+    try encodeTable(table, to: &encoder)
+    var decoder = encoder.encodedData.wireDecoder()
+    let decoded = try decodeTable(from: &decoder)
+    #expect(decoded["x-queue-type"]?.stringValue == "delayed")
+    #expect(decoded["x-delayed-retry-type"]?.stringValue == "failed")
+    #expect(decoded["x-delayed-retry-min"]?.intValue == 1_000)
+    #expect(decoded["x-delayed-retry-max"]?.intValue == 60_000)
+  }
+
+  @Test("JMS queue arguments round-trip through encoding")
+  func jmsQueueArguments() throws {
+    let table: Table = [
+      "x-queue-type": .string("jms"),
+      "x-selector-fields": .array([.string("priority"), .string("region")]),
+      "x-selector-field-max-bytes": .int64(256),
+    ]
+    var encoder = WireEncoder()
+    try encodeTable(table, to: &encoder)
+    var decoder = encoder.encodedData.wireDecoder()
+    let decoded = try decodeTable(from: &decoder)
+    #expect(decoded["x-queue-type"]?.stringValue == "jms")
+    if case .array(let fields) = decoded["x-selector-fields"] {
+      #expect(fields.count == 2)
+      #expect(fields[0].stringValue == "priority")
+      #expect(fields[1].stringValue == "region")
+    } else {
+      Issue.record("Expected x-selector-fields array")
+    }
+    #expect(decoded["x-selector-field-max-bytes"]?.intValue == 256)
+  }
+
   @Test("CC and BCC headers (array of strings)")
   func ccBccHeaders() throws {
     let table: Table = [
