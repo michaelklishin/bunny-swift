@@ -1,4 +1,4 @@
-## 0.13.0 (in development)
+## 0.13.0 (Mar 22, 2026)
 
 ### Enhancements
 
