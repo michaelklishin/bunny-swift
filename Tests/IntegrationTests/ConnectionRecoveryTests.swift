@@ -18,6 +18,10 @@ import Testing
 
 @testable import BunnySwift
 
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+
 // MARK: - Recovery Test Config
 
 private let httpAPI = Client()
