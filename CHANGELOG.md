@@ -1,6 +1,10 @@
 ## 0.14.0 (in development)
 
-No changes yet.
+### Internal Changes
+
+ * Refactored negotiation of several connection parameters to exactly match what several other,
+   much more mature clients do. This touches `heartbeat`, `channel_max`, `frame_max` negotiation
+   when a new connection is opened.
 
 
 ## 0.13.0 (Mar 22, 2026)
