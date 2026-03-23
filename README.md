@@ -8,8 +8,7 @@ If you are looking for a RabbitMQ HTTP API for Swift 6, see [`michaelklishin/rab
 
 ## Supported iOS and macOS Versions
 
-This library targets macOS 14+, iOS 17+, tvOS 17+, watchOS 10+, and visionOS 1+.
-Swift 6.0 or later is required.
+This library targets Swift 6+, macOS 14+, iOS 17+.
 
 
 ## Supported RabbitMQ Versions
