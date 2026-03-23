@@ -455,6 +455,22 @@ public enum AMQPReplyCode: UInt16, Sendable {
   }
 }
 
+// MARK: - Connection Parameter Negotiation
+
+/// Negotiate a connection parameter with target RabbitMQ node.
+///
+/// If either side proposes 0 (meaning "no limit" or "use the peer's value"),
+/// the non-zero value wins (or 0 if both are 0). Otherwise the smaller
+/// value is used.
+///
+/// Used for negotiating `heartbeat`, `channel_max`, and `frame_max`.
+public func negotiatedMaxValue<T: FixedWidthInteger>(_ clientValue: T, _ serverValue: T) -> T {
+  if clientValue == 0 || serverValue == 0 {
+    return max(clientValue, serverValue)
+  }
+  return min(clientValue, serverValue)
+}
+
 // MARK: - Negotiated Parameters
 
 /// Parameters negotiated during connection handshake

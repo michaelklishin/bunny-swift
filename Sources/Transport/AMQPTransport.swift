@@ -208,10 +208,9 @@ public actor AMQPTransport {
       throw ConnectionError.protocolError("Expected Connection.Tune")
     }
 
-    let channelMax = min(
-      configuration.channelMax, tune.channelMax == 0 ? UInt16.max : tune.channelMax)
-    let frameMax = min(configuration.frameMax, tune.frameMax == 0 ? UInt32.max : tune.frameMax)
-    let heartbeat = min(configuration.heartbeat, tune.heartbeat)
+    let channelMax = negotiatedMaxValue(configuration.channelMax, tune.channelMax)
+    let frameMax = negotiatedMaxValue(configuration.frameMax, tune.frameMax)
+    let heartbeat = negotiatedMaxValue(configuration.heartbeat, tune.heartbeat)
 
     let tuneOk = ConnectionTuneOk(channelMax: channelMax, frameMax: frameMax, heartbeat: heartbeat)
     try await sendRaw(.method(channelID: 0, method: .connectionTuneOk(tuneOk)))

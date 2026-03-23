@@ -340,22 +340,22 @@ final class HeartbeatHandler: ChannelDuplexHandler, RemovableChannelHandler, @un
   typealias OutboundIn = Frame
   typealias OutboundOut = Frame
 
-  private let interval: TimeAmount
+  /// The check interval: half the negotiated heartbeat, minimum 1 second.
+  let checkInterval: TimeAmount
   private var lastReceived: NIODeadline
   private var lastSent: NIODeadline
   private var scheduledTask: Scheduled<Void>?
   private let onTimeout: @Sendable () -> Void
 
   init(interval: UInt16, onTimeout: @escaping @Sendable () -> Void) {
-    // Send heartbeat every interval/2 seconds
-    self.interval = .seconds(Int64(max(interval / 2, 1)))
+    self.checkInterval = .seconds(Int64(max(interval / 2, 1)))
     self.lastReceived = .now()
     self.lastSent = .now()
     self.onTimeout = onTimeout
   }
 
   func handlerAdded(context: ChannelHandlerContext) {
-    if interval.nanoseconds > 0 {
+    if checkInterval.nanoseconds > 0 {
       scheduleHeartbeat(context: context)
     }
   }
@@ -382,7 +382,7 @@ final class HeartbeatHandler: ChannelDuplexHandler, RemovableChannelHandler, @un
   }
 
   private func scheduleHeartbeat(context: ChannelHandlerContext) {
-    scheduledTask = context.eventLoop.scheduleTask(in: interval) { [weak self] in
+    scheduledTask = context.eventLoop.scheduleTask(in: checkInterval) { [weak self] in
       self?.checkHeartbeat(context: context)
     }
   }
@@ -391,7 +391,7 @@ final class HeartbeatHandler: ChannelDuplexHandler, RemovableChannelHandler, @un
     let now = NIODeadline.now()
 
     // Timeout after 4x the check interval (= 2x negotiated heartbeat)
-    let timeout = TimeAmount.nanoseconds(interval.nanoseconds * 4)
+    let timeout = TimeAmount.nanoseconds(checkInterval.nanoseconds * 4)
     if now - lastReceived > timeout {
       onTimeout()
       context.close(promise: nil)
@@ -399,7 +399,7 @@ final class HeartbeatHandler: ChannelDuplexHandler, RemovableChannelHandler, @un
     }
 
     // Send heartbeat if we haven't sent anything recently
-    if now - lastSent > interval {
+    if now - lastSent > checkInterval {
       let frame = Frame.heartbeat
       context.writeAndFlush(wrapOutboundOut(frame), promise: nil)
     }
