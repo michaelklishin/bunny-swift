@@ -17,6 +17,8 @@ public typealias AMQPMethod = AMQPProtocol.Method
 public actor Channel {
   private weak var connection: Connection?
   private let channelID: UInt16
+  private var transport: AMQPTransport?
+  private var cachedFrameMax: UInt32 = FrameDefaults.maxSize
   private var isOpen = false
   private var confirmMode = false
   private var transactionMode = false
@@ -63,6 +65,10 @@ public actor Channel {
     let response = try await waitForResponse()
     guard case .channelOpenOk = response else {
       throw ConnectionError.protocolError("Expected Channel.OpenOk, got \(response)")
+    }
+    if let connection = connection {
+      self.cachedFrameMax = await connection.frameMax
+      self.transport = await connection.transportRef
     }
     isOpen = true
   }
@@ -435,7 +441,7 @@ public actor Channel {
     immediate: Bool = false,
     properties: BasicProperties = .persistent
   ) async throws {
-    guard isOpen, let connection = connection else {
+    guard isOpen, let transport = transport else {
       throw ConnectionError.notConnected
     }
 
@@ -445,18 +451,17 @@ public actor Channel {
 
     let seqNo = confirmMode ? nextPublishSeqNo : 0
 
-    let frames = buildPublishFrames(
-      body: body,
+    try await transport.writePublish(
+      channelID: channelID,
       exchange: exchange,
       routingKey: routingKey,
       mandatory: mandatory,
       immediate: immediate,
       properties: properties,
-      frameMax: await connection.frameMax
+      body: body,
+      frameMax: cachedFrameMax
     )
-
-    try await connection.writeBatch(frames)
-    await connection.flush()
+    await transport.flush()
 
     if confirmMode {
       nextPublishSeqNo += 1
@@ -477,7 +482,7 @@ public actor Channel {
     mandatory: Bool = false,
     properties: BasicProperties = .persistent
   ) async throws {
-    guard isOpen, let connection = connection else {
+    guard isOpen, let transport = transport else {
       throw ConnectionError.notConnected
     }
 
@@ -487,22 +492,21 @@ public actor Channel {
 
     let seqNo = confirmMode ? nextPublishSeqNo : 0
 
-    let frames = buildPublishFrames(
-      body: body,
+    try await transport.writePublish(
+      channelID: channelID,
       exchange: exchange,
       routingKey: routingKey,
       mandatory: mandatory,
       immediate: false,
       properties: properties,
-      frameMax: await connection.frameMax
+      body: body,
+      frameMax: cachedFrameMax
     )
-
-    try await connection.writeBatch(frames)
 
     if confirmMode {
       nextPublishSeqNo += 1
       if publisherConfirmationTracking {
-        await connection.flush()
+        await transport.flush()
         try await awaitConfirmation(seqNo: seqNo)
       }
     }
@@ -528,57 +532,7 @@ public actor Channel {
   }
 
   public func flush() async {
-    await connection?.flush()
-  }
-
-  private func buildPublishFrames(
-    body: Data,
-    exchange: String,
-    routingKey: String,
-    mandatory: Bool,
-    immediate: Bool,
-    properties: BasicProperties,
-    frameMax: UInt32
-  ) -> [Frame] {
-    let maxBodySize = Int(frameMax) - 8
-    let bodyFrameCount = body.isEmpty ? 0 : (body.count + maxBodySize - 1) / maxBodySize
-    var frames: [Frame] = []
-    frames.reserveCapacity(2 + bodyFrameCount)
-
-    let publish = BasicPublish(
-      reserved1: 0,
-      exchange: exchange,
-      routingKey: routingKey,
-      mandatory: mandatory,
-      immediate: immediate
-    )
-    frames.append(.method(channelID: channelID, method: .basicPublish(publish)))
-
-    frames.append(
-      .header(
-        channelID: channelID,
-        classID: ClassID.basic.rawValue,
-        bodySize: UInt64(body.count),
-        properties: properties
-      ))
-
-    // AMQP 0-9-1: no body frames when bodySize is zero
-    if !body.isEmpty {
-      if body.count <= maxBodySize {
-        // Fast path: body fits in single frame, no copy needed
-        frames.append(.body(channelID: channelID, payload: body))
-      } else {
-        // Chunked: split into multiple frames
-        var offset = 0
-        while offset < body.count {
-          let end = min(offset + maxBodySize, body.count)
-          frames.append(.body(channelID: channelID, payload: body[offset..<end]))
-          offset = end
-        }
-      }
-    }
-
-    return frames
+    await transport?.flush()
   }
 
   // MARK: - Consuming

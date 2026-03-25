@@ -106,11 +106,19 @@ final class AMQPFrameDecoder: ByteToMessageDecoder, RemovableChannelHandler, @un
   }
 }
 
+// MARK: - Outbound Data
+
+/// Wrapper for outbound data: either an AMQP frame to encode or a pre-encoded buffer.
+enum AMQPOutboundData: Sendable {
+  case frame(Frame)
+  case encoded(ByteBuffer)
+}
+
 // MARK: - Frame Encoder
 
 /// Encodes AMQP frames directly to ByteBuffer for zero-copy performance
 final class AMQPFrameEncoder: ChannelOutboundHandler, RemovableChannelHandler, @unchecked Sendable {
-  typealias OutboundIn = Frame
+  typealias OutboundIn = AMQPOutboundData
   typealias OutboundOut = ByteBuffer
 
   private let maxFrameSize: UInt32
@@ -122,13 +130,18 @@ final class AMQPFrameEncoder: ChannelOutboundHandler, RemovableChannelHandler, @
   }
 
   func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
-    let frame = unwrapOutboundIn(data)
-    do {
-      var buffer = context.channel.allocator.buffer(capacity: estimateFrameSize(frame))
-      try encodeFrame(frame, to: &buffer)
+    let outbound = unwrapOutboundIn(data)
+    switch outbound {
+    case .encoded(let buffer):
       context.write(wrapOutboundOut(buffer), promise: promise)
-    } catch {
-      promise?.fail(error)
+    case .frame(let frame):
+      do {
+        var buffer = context.channel.allocator.buffer(capacity: estimateFrameSize(frame))
+        try encodeFrame(frame, to: &buffer)
+        context.write(wrapOutboundOut(buffer), promise: promise)
+      } catch {
+        promise?.fail(error)
+      }
     }
   }
 
@@ -337,8 +350,8 @@ final class ConnectionStateHandler: ChannelInboundHandler {
 final class HeartbeatHandler: ChannelDuplexHandler, RemovableChannelHandler, @unchecked Sendable {
   typealias InboundIn = Frame
   typealias InboundOut = Frame
-  typealias OutboundIn = Frame
-  typealias OutboundOut = Frame
+  typealias OutboundIn = AMQPOutboundData
+  typealias OutboundOut = AMQPOutboundData
 
   /// The check interval: half the negotiated heartbeat, minimum 1 second.
   let checkInterval: TimeAmount
@@ -400,8 +413,7 @@ final class HeartbeatHandler: ChannelDuplexHandler, RemovableChannelHandler, @un
 
     // Send heartbeat if we haven't sent anything recently
     if now - lastSent > checkInterval {
-      let frame = Frame.heartbeat
-      context.writeAndFlush(wrapOutboundOut(frame), promise: nil)
+      context.writeAndFlush(wrapOutboundOut(.frame(.heartbeat)), promise: nil)
     }
 
     scheduleHeartbeat(context: context)

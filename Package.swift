@@ -65,6 +65,12 @@ let package = Package(
             ]
         ),
 
+        // MARK: - Benchmark
+        .executableTarget(
+            name: "Benchmark",
+            dependencies: ["BunnySwift"]
+        ),
+
         // MARK: - Unit Tests
         .testTarget(
             name: "AMQPProtocolTests",

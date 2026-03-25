@@ -300,7 +300,7 @@ public actor AMQPTransport {
     guard let channel = channel, isConnected else {
       throw ConnectionError.notConnected
     }
-    try await channel.writeAndFlush(frame).get()
+    try await channel.writeAndFlush(AMQPOutboundData.frame(frame)).get()
   }
 
   /// Buffers frame; auto-flushes at threshold or timer
@@ -308,7 +308,7 @@ public actor AMQPTransport {
     guard let channel = channel, isConnected else {
       throw ConnectionError.notConnected
     }
-    channel.write(frame, promise: nil)
+    channel.write(AMQPOutboundData.frame(frame), promise: nil)
     pendingWrites += 1
     maybeFlush(channel: channel)
   }
@@ -318,9 +318,98 @@ public actor AMQPTransport {
       throw ConnectionError.notConnected
     }
     for frame in frames {
-      channel.write(frame, promise: nil)
+      channel.write(AMQPOutboundData.frame(frame), promise: nil)
     }
     pendingWrites += frames.count
+    maybeFlush(channel: channel)
+  }
+
+  /// Encodes method + header + body into a single ByteBuffer and buffers the write.
+  /// Bypasses the per-frame encoder pipeline for maximum publish throughput.
+  public func writePublish(
+    channelID: UInt16,
+    exchange: String,
+    routingKey: String,
+    mandatory: Bool,
+    immediate: Bool,
+    properties: BasicProperties,
+    body: Data,
+    frameMax: UInt32
+  ) async throws {
+    guard let channel = channel, isConnected else {
+      throw ConnectionError.notConnected
+    }
+
+    let maxBodySize = Int(frameMax) - 8
+    let methodSize = 14 + exchange.utf8.count + routingKey.utf8.count + 9
+    // Frame overhead + fixed header fields + properties estimate
+    let headerSize = 8 + 12 + 64 + 1
+    let bodyOverhead = body.isEmpty ? 0 : ((body.count + maxBodySize - 1) / maxBodySize) * 9
+    var buffer = channel.allocator.buffer(
+      capacity: methodSize + headerSize + body.count + bodyOverhead)
+
+    // BasicPublish method frame
+    let exchangeBytes = exchange.utf8
+    let routingKeyBytes = routingKey.utf8
+    let methodPayloadSize = 2 + 2 + 2 + 1 + exchangeBytes.count + 1 + routingKeyBytes.count + 1
+    buffer.writeInteger(FrameType.method.rawValue)
+    buffer.writeInteger(channelID, endianness: .big)
+    buffer.writeInteger(UInt32(methodPayloadSize), endianness: .big)
+    // Basic class (60), Publish method (40)
+    buffer.writeInteger(UInt16(60), endianness: .big)
+    buffer.writeInteger(UInt16(40), endianness: .big)
+    // reserved1
+    buffer.writeInteger(UInt16(0), endianness: .big)
+    buffer.writeInteger(UInt8(exchangeBytes.count))
+    buffer.writeBytes(exchangeBytes)
+    buffer.writeInteger(UInt8(routingKeyBytes.count))
+    buffer.writeBytes(routingKeyBytes)
+    var flags: UInt8 = 0
+    if mandatory { flags |= 0x01 }
+    if immediate { flags |= 0x02 }
+    buffer.writeInteger(flags)
+    buffer.writeInteger(frameEnd)
+
+    // Content header frame
+    var propsEncoder = WireEncoder()
+    try properties.encode(to: &propsEncoder)
+    let propsData = propsEncoder.encodedData
+    let headerPayloadSize = 2 + 2 + 8 + propsData.count
+    buffer.writeInteger(FrameType.header.rawValue)
+    buffer.writeInteger(channelID, endianness: .big)
+    buffer.writeInteger(UInt32(headerPayloadSize), endianness: .big)
+    buffer.writeInteger(ClassID.basic.rawValue, endianness: .big)
+    // weight (reserved)
+    buffer.writeInteger(UInt16(0), endianness: .big)
+    buffer.writeInteger(UInt64(body.count), endianness: .big)
+    buffer.writeContiguousBytes(propsData)
+    buffer.writeInteger(frameEnd)
+
+    // Encode body frame(s)
+    if !body.isEmpty {
+      if body.count <= maxBodySize {
+        buffer.writeInteger(FrameType.body.rawValue)
+        buffer.writeInteger(channelID, endianness: .big)
+        buffer.writeInteger(UInt32(body.count), endianness: .big)
+        buffer.writeContiguousBytes(body)
+        buffer.writeInteger(frameEnd)
+      } else {
+        var offset = 0
+        while offset < body.count {
+          let end = min(offset + maxBodySize, body.count)
+          let chunk = body[offset..<end]
+          buffer.writeInteger(FrameType.body.rawValue)
+          buffer.writeInteger(channelID, endianness: .big)
+          buffer.writeInteger(UInt32(chunk.count), endianness: .big)
+          buffer.writeContiguousBytes(chunk)
+          buffer.writeInteger(frameEnd)
+          offset = end
+        }
+      }
+    }
+
+    channel.write(AMQPOutboundData.encoded(buffer), promise: nil)
+    pendingWrites += 1
     maybeFlush(channel: channel)
   }
 

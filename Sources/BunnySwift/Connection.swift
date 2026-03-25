@@ -413,6 +413,9 @@ public actor Connection {
     await transport.flush()
   }
 
+  /// Direct access to the transport for bypassing the Connection actor on hot paths
+  internal var transportRef: AMQPTransport { transport }
+
   // MARK: - Events
 
   public func onBlocked(_ handler: @escaping @Sendable (String) -> Void) {
