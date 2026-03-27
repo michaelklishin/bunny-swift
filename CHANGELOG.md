@@ -2,9 +2,9 @@
 
 ### Enhancements
 
- * `ExchangeType.modulusHash`, `.localRandom`, `.consistentHash`, `.random`:
-   first-class support for non-standard exchange types shipped with RabbitMQ core
-   and commonly used plugins
+ * `ExchangeType` now supports non-standard exchange types (`.modulusHash`, `.localRandom`,
+   `.consistentHash`, `.random`, `.jmsTopic`, `.recentHistory`) and a `.plugin(String)`
+   catch-all for arbitrary plugin exchange types
  * ~20% higher publish throughput on sustained workloads thanks to single-buffer frame encoding
    and fewer actor hops on the publish path
 

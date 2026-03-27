@@ -1176,18 +1176,56 @@ public actor Channel {
 
 // MARK: - Supporting Types
 
-public enum ExchangeType: String, Sendable {
+public enum ExchangeType: Sendable, Equatable, Hashable, CustomStringConvertible {
   case direct
   case fanout
   case topic
   case headers
   // In RabbitMQ core since 4.3.0
-  case modulusHash = "x-modulus-hash"
+  case modulusHash
   // In RabbitMQ core since 4.2.0
-  case localRandom = "x-local-random"
+  case localRandom
   // Provided by commonly used plugins
-  case consistentHash = "x-consistent-hash"
-  case random = "x-random"
+  case consistentHash
+  case random
+  case jmsTopic
+  case recentHistory
+  // Catch-all for any other plugin exchange type
+  case plugin(String)
+
+  public var rawValue: String {
+    switch self {
+    case .direct: "direct"
+    case .fanout: "fanout"
+    case .topic: "topic"
+    case .headers: "headers"
+    case .modulusHash: "x-modulus-hash"
+    case .localRandom: "x-local-random"
+    case .consistentHash: "x-consistent-hash"
+    case .random: "x-random"
+    case .jmsTopic: "x-jms-topic"
+    case .recentHistory: "x-recent-history"
+    case .plugin(let value): value
+    }
+  }
+
+  public init(rawValue: String) {
+    switch rawValue {
+    case "direct": self = .direct
+    case "fanout": self = .fanout
+    case "topic": self = .topic
+    case "headers": self = .headers
+    case "x-modulus-hash": self = .modulusHash
+    case "x-local-random": self = .localRandom
+    case "x-consistent-hash": self = .consistentHash
+    case "x-random": self = .random
+    case "x-jms-topic": self = .jmsTopic
+    case "x-recent-history": self = .recentHistory
+    default: self = .plugin(rawValue)
+    }
+  }
+
+  public var description: String { rawValue }
 }
 
 /// Converts a `Duration` to milliseconds as `Int64` for AMQP 0-9-1 table values.

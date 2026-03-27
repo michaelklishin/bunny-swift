@@ -241,23 +241,6 @@ public struct PropertyFlags: OptionSet, Sendable {
   public static let clusterId = PropertyFlags(rawValue: 1 << 2)  // deprecated
 }
 
-// MARK: - Exchange Types
-
-/// Standard AMQP exchange types
-public enum ExchangeTypeName: String, Sendable {
-  case direct = "direct"
-  case fanout = "fanout"
-  case topic = "topic"
-  case headers = "headers"
-  // In RabbitMQ core since 4.3.0
-  case modulusHash = "x-modulus-hash"
-  // In RabbitMQ core since 4.2.0
-  case localRandom = "x-local-random"
-  // Provided by commonly used plugins
-  case consistentHash = "x-consistent-hash"
-  case random = "x-random"
-}
-
 // MARK: - Delivery Mode
 
 /// Message delivery mode

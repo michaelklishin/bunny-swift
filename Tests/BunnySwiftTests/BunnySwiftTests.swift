@@ -160,19 +160,45 @@ struct QueueTypeTests {
 
 @Suite("ExchangeType Tests")
 struct ExchangeTypeTests {
-  @Test("standard exchange type rawValues")
-  func standardRawValues() {
-    #expect(ExchangeType.direct.rawValue == "direct")
-    #expect(ExchangeType.fanout.rawValue == "fanout")
-    #expect(ExchangeType.topic.rawValue == "topic")
-    #expect(ExchangeType.headers.rawValue == "headers")
+  // Every known case and its expected wire name
+  static let knownCases: [(ExchangeType, String)] = [
+    (.direct, "direct"),
+    (.fanout, "fanout"),
+    (.topic, "topic"),
+    (.headers, "headers"),
+    (.modulusHash, "x-modulus-hash"),
+    (.localRandom, "x-local-random"),
+    (.consistentHash, "x-consistent-hash"),
+    (.random, "x-random"),
+    (.jmsTopic, "x-jms-topic"),
+    (.recentHistory, "x-recent-history"),
+  ]
+
+  @Test("known exchange type rawValues")
+  func knownRawValues() {
+    for (type, expected) in ExchangeTypeTests.knownCases {
+      #expect(type.rawValue == expected)
+    }
   }
 
-  @Test("all exchange types produce unique rawValues")
+  @Test("all known cases produce unique rawValues")
   func allTypesUniqueRawValues() {
-    let allTypes: [ExchangeType] = [.direct, .fanout, .topic, .headers]
-    let rawValues = Set(allTypes.map(\.rawValue))
-    #expect(rawValues.count == allTypes.count)
+    let rawValues = Set(ExchangeTypeTests.knownCases.map(\.1))
+    #expect(rawValues.count == ExchangeTypeTests.knownCases.count)
+  }
+
+  @Test("init(rawValue:) round-trips all known cases")
+  func roundTrip() {
+    for (type, wire) in ExchangeTypeTests.knownCases {
+      #expect(ExchangeType(rawValue: wire) == type)
+    }
+  }
+
+  @Test("plugin catch-all accepts arbitrary strings")
+  func pluginCatchAll() {
+    let t = ExchangeType(rawValue: "x-custom-plugin")
+    #expect(t == .plugin("x-custom-plugin"))
+    #expect(t.rawValue == "x-custom-plugin")
   }
 }
 
