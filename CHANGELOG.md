@@ -2,6 +2,9 @@
 
 ### Enhancements
 
+ * `ExchangeType.modulusHash`, `.localRandom`, `.consistentHash`, `.random`:
+   first-class support for non-standard exchange types shipped with RabbitMQ core
+   and commonly used plugins
  * ~20% higher publish throughput on sustained workloads thanks to single-buffer frame encoding
    and fewer actor hops on the publish path
 

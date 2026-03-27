@@ -1181,6 +1181,13 @@ public enum ExchangeType: String, Sendable {
   case fanout
   case topic
   case headers
+  // In RabbitMQ core since 4.3.0
+  case modulusHash = "x-modulus-hash"
+  // In RabbitMQ core since 4.2.0
+  case localRandom = "x-local-random"
+  // Provided by commonly used plugins
+  case consistentHash = "x-consistent-hash"
+  case random = "x-random"
 }
 
 /// Converts a `Duration` to milliseconds as `Int64` for AMQP 0-9-1 table values.

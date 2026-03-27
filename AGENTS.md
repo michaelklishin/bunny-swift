@@ -39,7 +39,7 @@ Test suites require a RabbitMQ node running on `localhost:5672` with default cre
  * Target Swift 6, iOS 18, iPad OS 18, macOS Sonoma
  * Use top-level `import` statements, never function-local imports
  * At the end of each task, format the entire codebase using [`swift-format`](https://github.com/swiftlang/swift-format)
-
+ * Single line code comments go above the line being commented on, not at the end of the line
 
 ## Tests
 
