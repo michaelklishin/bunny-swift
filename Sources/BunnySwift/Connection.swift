@@ -20,6 +20,8 @@ public actor Connection {
   private var isOpen = false
   private var blockedReason: String?
 
+  private var frameIterator: FrameIterator?
+  private var frameDispatchTask: Task<Void, Never>?
   private var closedByClient = false
   private var recovering = false
 
@@ -188,17 +190,20 @@ public actor Connection {
 
   // MARK: - Frame Dispatch
 
+  /// Reads frames from the transport's AsyncStream in a non-actor-isolated Task,
+  /// dispatching each frame into the Connection actor. This avoids an actor hop
+  /// on the Transport for every inbound frame.
   private func startFrameDispatcher() async {
-    await transport.setFrameHandler(
-      { [weak self] frame in
-        guard let self = self else { return }
+    guard let iterator = await transport.handoffFrameIterator() else { return }
+    self.frameIterator = iterator
+    frameDispatchTask = Task { [weak self, iterator] in
+      while let frame = await iterator.next() {
+        guard let self else { break }
         await self.dispatchFrame(frame)
-      },
-      onDisconnect: { [weak self] in
-        guard let self = self else { return }
-        await self.handleDisconnection()
       }
-    )
+      guard let self else { return }
+      await self.handleDisconnection()
+    }
   }
 
   private func dispatchFrame(_ frame: Frame) async {
@@ -239,28 +244,27 @@ public actor Connection {
 
   // MARK: - Automatic Recovery
 
-  /// Called when the frame dispatcher terminates unexpectedly (network failure, heartbeat timeout).
+  /// Called when the frame dispatch loop terminates (network failure, heartbeat timeout).
   private func handleDisconnection() async {
     guard !closedByClient else { return }
     guard !recovering else { return }
 
     isOpen = false
+    frameDispatchTask = nil
+    frameIterator = nil
+    await transport.markDisconnected()
 
-    // Notify all channels that the connection is lost so pending operations fail
     for channel in channels.values {
       await channel.handleConnectionLost()
     }
 
     guard configuration.automaticRecovery else {
-      // No recovery: terminate all consumer streams permanently
       for channel in channels.values {
         await channel.terminateConsumers()
       }
       return
     }
 
-    // Spawn recovery in a new task so it is not cancelled when
-    // resetForRecovery cancels the old frame dispatch task.
     recovering = true
     Task { [weak self] in
       await self?.performRecovery()
@@ -465,6 +469,13 @@ public actor Connection {
       try? await channel.close()
     }
     channels.removeAll()
+
+    // Stop the dispatch loop before closing the transport
+    frameDispatchTask?.cancel()
+    _ = await frameDispatchTask?.value
+    frameDispatchTask = nil
+    frameIterator = nil
+
     await transport.close()
   }
 

@@ -686,3 +686,192 @@ struct PublisherConfirmsIntegrationTests {
     _ = try await queue.delete()
   }
 }
+
+// MARK: - Batch Publish Tests
+
+@Suite("Batch Publish Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
+struct BatchPublishIntegrationTests {
+
+  @Test("Batch publish delivers all messages", .timeLimit(.minutes(1)))
+  func batchPublishDeliversAll() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    let messageCount = 100
+    let bodies = (0..<messageCount).map { Data("batch-msg-\($0)".utf8) }
+    try await channel.basicPublishBatch(
+      bodies: bodies, routingKey: queue.name)
+
+    try await Task.sleep(for: .milliseconds(200))
+
+    var received = 0
+    while let msg = try await queue.get(acknowledgementMode: .automatic) {
+      #expect(msg.bodyString?.hasPrefix("batch-msg-") == true)
+      received += 1
+    }
+    #expect(received == messageCount)
+
+    _ = try await queue.delete()
+  }
+
+  @Test("Batch publish with empty array is a no-op", .timeLimit(.minutes(1)))
+  func batchPublishEmptyArray() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+
+    // Should not throw
+    try await channel.basicPublishBatch(bodies: [], routingKey: "nonexistent")
+  }
+
+  @Test("Batch publish with publisher confirms", .timeLimit(.minutes(1)))
+  func batchPublishWithConfirms() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    try await channel.confirmSelect(tracking: true)
+
+    let messageCount = 50
+    let bodies = (0..<messageCount).map { Data("confirmed-\($0)".utf8) }
+
+    // Should not throw — all messages confirmed
+    try await channel.basicPublishBatch(
+      bodies: bodies, routingKey: queue.name)
+
+    let seqNo = await channel.publishSeqNo
+    #expect(seqNo == UInt64(messageCount) + 1)
+
+    _ = try await queue.delete()
+  }
+
+  @Test("Batch publish sequence numbers increment correctly", .timeLimit(.minutes(1)))
+  func batchPublishSeqNos() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    try await channel.confirmSelect()
+
+    let before = await channel.publishSeqNo
+    let batchSize = 20
+    let bodies = (0..<batchSize).map { Data("seq-\($0)".utf8) }
+    try await channel.basicPublishBatch(
+      bodies: bodies, routingKey: queue.name)
+
+    let after = await channel.publishSeqNo
+    #expect(after == before + UInt64(batchSize))
+
+    _ = try await queue.delete()
+  }
+
+  @Test("Batch publish with custom properties", .timeLimit(.minutes(1)))
+  func batchPublishWithProperties() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    let properties = BasicProperties.persistent
+      .withContentType("application/json")
+      .withCorrelationId("batch-123")
+
+    let bodies = (0..<5).map { Data("{\"i\":\($0)}".utf8) }
+    try await channel.basicPublishBatch(
+      bodies: bodies, routingKey: queue.name, properties: properties)
+
+    try await Task.sleep(for: .milliseconds(100))
+
+    let response = try await queue.get(acknowledgementMode: .automatic)
+    #expect(response != nil)
+    #expect(response?.properties.contentType == "application/json")
+    #expect(response?.properties.correlationId == "batch-123")
+
+    _ = try await queue.delete()
+  }
+
+  @Test("Batch publish with large messages spanning multiple body frames", .timeLimit(.minutes(1)))
+  func batchPublishLargeMessages() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    // Create messages larger than the default frame max (~128KB)
+    // to exercise the multi-body-frame path
+    let largeBody = Data(repeating: 0xAB, count: 200_000)
+    let bodies = [largeBody, largeBody, largeBody]
+    try await channel.basicPublishBatch(
+      bodies: bodies, routingKey: queue.name)
+
+    try await Task.sleep(for: .milliseconds(500))
+
+    var received = 0
+    while let msg = try await queue.get(acknowledgementMode: .automatic) {
+      #expect(msg.body.count == 200_000)
+      received += 1
+    }
+    #expect(received == 3)
+
+    _ = try await queue.delete()
+  }
+
+  @Test("Batch publish with empty-body messages", .timeLimit(.minutes(1)))
+  func batchPublishEmptyBodies() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    let bodies = [Data(), Data(), Data()]
+    try await channel.basicPublishBatch(
+      bodies: bodies, routingKey: queue.name)
+
+    try await Task.sleep(for: .milliseconds(100))
+
+    var received = 0
+    while (try await queue.get(acknowledgementMode: .automatic)) != nil {
+      received += 1
+    }
+    #expect(received == 3)
+
+    _ = try await queue.delete()
+  }
+
+  @Test("Batch publish via async stream consumption", .timeLimit(.minutes(1)))
+  func batchPublishConsumeViaStream() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    let stream = try await queue.consume(acknowledgementMode: .automatic)
+
+    let messageCount = 200
+    let bodies = (0..<messageCount).map { Data("stream-\($0)".utf8) }
+    try await channel.basicPublishBatch(
+      bodies: bodies, routingKey: queue.name)
+
+    var received = 0
+    for try await _ in stream {
+      received += 1
+      if received >= messageCount { break }
+    }
+    #expect(received == messageCount)
+
+    try await stream.cancel()
+    _ = try await queue.delete()
+  }
+}

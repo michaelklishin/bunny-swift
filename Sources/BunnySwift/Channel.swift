@@ -512,6 +512,67 @@ public actor Channel {
     }
   }
 
+  /// Publishes a batch of messages to the same exchange and routing key
+  /// in a single buffer and NIO write.
+  ///
+  /// All frames are encoded into one contiguous buffer with a single NIO write.
+  /// Flushing is handled by the transport's write buffering (threshold + timer),
+  /// which paces delivery to avoid triggering broker flow control.
+  ///
+  /// When publisher confirms are enabled, all sequence numbers are registered
+  /// before the write and confirmed after the flush.
+  public func basicPublishBatch(
+    bodies: [Data],
+    exchange: String = "",
+    routingKey: String,
+    mandatory: Bool = false,
+    properties: BasicProperties = .persistent
+  ) async throws {
+    guard isOpen, let transport = transport else {
+      throw ConnectionError.notConnected
+    }
+    guard !bodies.isEmpty else { return }
+
+    let batchSize = bodies.count
+
+    if publisherConfirmationTracking {
+      for _ in 0..<batchSize {
+        await waitForConfirmSlot()
+      }
+    }
+
+    // Reserve sequence numbers for the entire batch before writing
+    let firstSeqNo = confirmMode ? nextPublishSeqNo : 0
+    if confirmMode {
+      nextPublishSeqNo += UInt64(batchSize)
+    }
+
+    try await transport.writePublishBatch(
+      channelID: channelID,
+      exchange: exchange,
+      routingKey: routingKey,
+      mandatory: mandatory,
+      properties: properties,
+      bodies: bodies,
+      frameMax: cachedFrameMax
+    )
+    // No explicit flush: the transport's write buffering (threshold + timer)
+    // paces writes to avoid bursty flow that triggers broker flow control
+
+    if confirmMode && publisherConfirmationTracking {
+      // Wait for all confirmations concurrently
+      try await withThrowingTaskGroup(of: Void.self) { group in
+        for i in 0..<UInt64(batchSize) {
+          let seqNo = firstSeqNo + i
+          group.addTask {
+            try await self.awaitConfirmation(seqNo: seqNo)
+          }
+        }
+        try await group.waitForAll()
+      }
+    }
+  }
+
   private func waitForConfirmSlot() async {
     guard outstandingConfirmsLimit > 0 else { return }
     while outstandingConfirmsCount >= outstandingConfirmsLimit {

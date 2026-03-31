@@ -19,15 +19,16 @@ public enum SharedEventLoopGroup {
   public static var shared: EventLoopGroup { _shared }
 }
 
-/// Wraps AsyncIterator for actor-isolated access (@unchecked since only accessed within actor)
-private final class IteratorBox<Element>: @unchecked Sendable {
-  var iterator: AsyncStream<Element>.AsyncIterator
+/// Exposes an AsyncStream<Frame> iterator as a Sendable reference type.
+/// Thread-safe only when accessed by a single reader at a time.
+public final class FrameIterator: @unchecked Sendable {
+  private var iterator: AsyncStream<Frame>.AsyncIterator
 
-  init(_ iterator: AsyncStream<Element>.AsyncIterator) {
+  init(_ iterator: AsyncStream<Frame>.AsyncIterator) {
     self.iterator = iterator
   }
 
-  func next() async -> Element? {
+  public func next() async -> Frame? {
     await iterator.next()
   }
 }
@@ -64,10 +65,8 @@ public actor AMQPTransport {
   private let ownsEventLoopGroup: Bool
   private var channel: Channel?
   private var frameStream: AsyncStream<Frame>?
-  private var frameIterator: IteratorBox<Frame>?
+  private var frameIterator: FrameIterator?
   private var frameContinuation: AsyncStream<Frame>.Continuation?
-  private var frameHandler: (@Sendable (Frame) async -> Void)?
-  private var frameDispatchTask: Task<Void, Never>?
   private var isConnected = false
   private var negotiatedParams: NegotiatedParameters?
   private let codec: FrameCodec
@@ -105,7 +104,7 @@ public actor AMQPTransport {
 
     let (stream, continuation) = AsyncStream<Frame>.makeStream()
     self.frameStream = stream
-    self.frameIterator = IteratorBox(stream.makeAsyncIterator())
+    self.frameIterator = FrameIterator(stream.makeAsyncIterator())
     self.frameContinuation = continuation
 
     do {
@@ -413,6 +412,107 @@ public actor AMQPTransport {
     maybeFlush(channel: channel)
   }
 
+  /// Encodes all messages into a single ByteBuffer and issues one NIO write.
+  /// The shared exchange, routing key, mandatory flag, and properties are applied
+  /// to every message in the batch.
+  public func writePublishBatch(
+    channelID: UInt16,
+    exchange: String,
+    routingKey: String,
+    mandatory: Bool,
+    properties: BasicProperties,
+    bodies: [Data],
+    frameMax: UInt32
+  ) async throws {
+    guard let channel = channel, isConnected else {
+      throw ConnectionError.notConnected
+    }
+    guard !bodies.isEmpty else { return }
+
+    let maxBodySize = Int(frameMax) - 8
+    let exchangeBytes = Array(exchange.utf8)
+    let routingKeyBytes = Array(routingKey.utf8)
+    let methodPayloadSize = 2 + 2 + 2 + 1 + exchangeBytes.count + 1 + routingKeyBytes.count + 1
+    // Method frame overhead: 7 (type + channel + size) + payload + 1 (frame-end)
+    let methodFrameSize = 8 + methodPayloadSize
+
+    // Pre-encode properties once for the entire batch
+    var propsEncoder = WireEncoder()
+    try properties.encode(to: &propsEncoder)
+    let propsData = propsEncoder.encodedData
+    let headerPayloadSize = 2 + 2 + 8 + propsData.count
+    // Header frame overhead: 7 + payload + 1
+    let headerFrameSize = 8 + headerPayloadSize
+
+    var flags: UInt8 = 0
+    if mandatory { flags |= 0x01 }
+
+    // Estimate total buffer size
+    var totalSize = 0
+    for body in bodies {
+      totalSize += methodFrameSize + headerFrameSize
+      if !body.isEmpty {
+        let bodyFrameCount = (body.count + maxBodySize - 1) / maxBodySize
+        totalSize += body.count + bodyFrameCount * 9
+      }
+    }
+
+    var buffer = channel.allocator.buffer(capacity: totalSize)
+
+    for body in bodies {
+      // BasicPublish method frame
+      buffer.writeInteger(FrameType.method.rawValue)
+      buffer.writeInteger(channelID, endianness: .big)
+      buffer.writeInteger(UInt32(methodPayloadSize), endianness: .big)
+      buffer.writeInteger(UInt16(60), endianness: .big)
+      buffer.writeInteger(UInt16(40), endianness: .big)
+      buffer.writeInteger(UInt16(0), endianness: .big)
+      buffer.writeInteger(UInt8(exchangeBytes.count))
+      buffer.writeBytes(exchangeBytes)
+      buffer.writeInteger(UInt8(routingKeyBytes.count))
+      buffer.writeBytes(routingKeyBytes)
+      buffer.writeInteger(flags)
+      buffer.writeInteger(frameEnd)
+
+      // Content header frame (properties are shared, only body size differs)
+      buffer.writeInteger(FrameType.header.rawValue)
+      buffer.writeInteger(channelID, endianness: .big)
+      buffer.writeInteger(UInt32(headerPayloadSize), endianness: .big)
+      buffer.writeInteger(ClassID.basic.rawValue, endianness: .big)
+      buffer.writeInteger(UInt16(0), endianness: .big)
+      buffer.writeInteger(UInt64(body.count), endianness: .big)
+      buffer.writeContiguousBytes(propsData)
+      buffer.writeInteger(frameEnd)
+
+      // Body frame(s)
+      if !body.isEmpty {
+        if body.count <= maxBodySize {
+          buffer.writeInteger(FrameType.body.rawValue)
+          buffer.writeInteger(channelID, endianness: .big)
+          buffer.writeInteger(UInt32(body.count), endianness: .big)
+          buffer.writeContiguousBytes(body)
+          buffer.writeInteger(frameEnd)
+        } else {
+          var offset = 0
+          while offset < body.count {
+            let end = min(offset + maxBodySize, body.count)
+            let chunk = body[offset..<end]
+            buffer.writeInteger(FrameType.body.rawValue)
+            buffer.writeInteger(channelID, endianness: .big)
+            buffer.writeInteger(UInt32(chunk.count), endianness: .big)
+            buffer.writeContiguousBytes(chunk)
+            buffer.writeInteger(frameEnd)
+            offset = end
+          }
+        }
+      }
+    }
+
+    channel.write(AMQPOutboundData.encoded(buffer), promise: nil)
+    pendingWrites += bodies.count
+    maybeFlush(channel: channel)
+  }
+
   public func flush() async {
     guard let channel = channel, pendingWrites > 0 else { return }
     doFlush(channel: channel)
@@ -440,34 +540,15 @@ public actor AMQPTransport {
     }
   }
 
-  private var onDisconnect: (@Sendable () async -> Void)?
-
-  public func setFrameHandler(
-    _ handler: @escaping @Sendable (Frame) async -> Void,
-    onDisconnect: @escaping @Sendable () async -> Void
-  ) {
-    self.frameHandler = handler
-    self.onDisconnect = onDisconnect
-    startFrameDispatcher()
+  /// Returns the frame iterator for the caller to drive frame dispatch.
+  /// The Transport gives up its reference; only one reader may exist at a time.
+  public func handoffFrameIterator() -> FrameIterator? {
+    let iter = frameIterator
+    frameIterator = nil
+    return iter
   }
 
-  private func startFrameDispatcher() {
-    frameDispatchTask = Task { [weak self] in
-      while let self = self {
-        guard let frame = await self.nextFrame() else { break }
-        if let handler = await self.frameHandler {
-          await handler(frame)
-        }
-      }
-      // Frame stream ended: the connection was lost
-      if let self = self, let onDisconnect = await self.onDisconnect {
-        await self.markDisconnected()
-        await onDisconnect()
-      }
-    }
-  }
-
-  private func markDisconnected() {
+  public func markDisconnected() {
     isConnected = false
     scheduledFlush?.cancel()
     scheduledFlush = nil
@@ -476,8 +557,6 @@ public actor AMQPTransport {
   /// Resets internal state.
   /// Must be called before calling `connect` or after a connection failure.
   public func resetForRecovery() async {
-    frameDispatchTask?.cancel()
-    frameDispatchTask = nil
     scheduledFlush?.cancel()
     scheduledFlush = nil
     frameContinuation?.finish()
@@ -506,36 +585,24 @@ public actor AMQPTransport {
     }
 
     isConnected = false
-    frameDispatchTask?.cancel()
-    frameDispatchTask = nil
 
     let close = ConnectionClose(replyCode: 200, replyText: "Normal shutdown")
     try? await send(.method(channelID: 0, method: .connectionClose(close)))
 
-    await withTaskGroup(of: Void.self) { group in
-      group.addTask {
-        _ = await self.nextFrame()
-      }
-      group.addTask {
-        try? await Task.sleep(for: .milliseconds(500))
-      }
-      _ = await group.next()
-      group.cancelAll()
-    }
+    // Brief grace period for the server to process ConnectionClose
+    try? await Task.sleep(for: .milliseconds(100))
 
+    frameContinuation?.finish()
     try? await channel.close().get()
     self.channel = nil
     self.frameIterator = nil
     self.frameStream = nil
-    frameContinuation?.finish()
   }
 
   public func forceClose() async {
     isConnected = false
     scheduledFlush?.cancel()
     scheduledFlush = nil
-    frameDispatchTask?.cancel()
-    frameDispatchTask = nil
     frameContinuation?.finish()
     frameIterator = nil
     frameStream = nil

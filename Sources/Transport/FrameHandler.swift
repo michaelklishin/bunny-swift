@@ -15,6 +15,7 @@ final class AMQPFrameDecoder: ByteToMessageDecoder, RemovableChannelHandler, @un
   typealias InboundOut = Frame
 
   private let maxFrameSize: UInt32
+  private let codec = FrameCodec()
 
   init(maxFrameSize: UInt32 = FrameDefaults.maxSize) {
     self.maxFrameSize = maxFrameSize
@@ -73,9 +74,7 @@ final class AMQPFrameDecoder: ByteToMessageDecoder, RemovableChannelHandler, @un
 
     switch frameType {
     case .method:
-      let data = Data(buffer: payload)
-      let method = try FrameCodec().decodeMethod(from: data)
-      return .method(channelID: channelID, method: method)
+      return try parseMethodFrame(channelID: channelID, payload: payload)
 
     case .header:
       var buf = payload
@@ -85,18 +84,85 @@ final class AMQPFrameDecoder: ByteToMessageDecoder, RemovableChannelHandler, @un
       else {
         throw WireFormatError.insufficientData(needed: 12, available: payload.readableBytes)
       }
-      let propsData = Data(buffer: buf)
+      let propsBytes = buf.readableBytes
+      let propsData = buf.readData(length: propsBytes) ?? Data()
       var decoder = propsData.wireDecoder()
       let properties = try BasicProperties.decode(from: &decoder)
       return .header(
         channelID: channelID, classID: classID, bodySize: bodySize, properties: properties)
 
     case .body:
-      return .body(channelID: channelID, payload: Data(buffer: payload))
+      var buf = payload
+      let bodyData = buf.readData(length: buf.readableBytes) ?? Data()
+      return .body(channelID: channelID, payload: bodyData)
 
     case .heartbeat:
       return .heartbeat
     }
+  }
+
+  /// Decode method frames with a fast path for BasicDeliver, the hottest
+  /// inbound method on the consumer path.
+  private func parseMethodFrame(channelID: UInt16, payload: ByteBuffer) throws -> Frame {
+    var buf = payload
+    guard let classID = buf.readInteger(endianness: .big, as: UInt16.self),
+      let methodID = buf.readInteger(endianness: .big, as: UInt16.self)
+    else {
+      throw WireFormatError.insufficientData(needed: 4, available: payload.readableBytes)
+    }
+
+    // Fast path: Basic.Deliver (class 60, method 60)
+    if classID == 60 && methodID == 60 {
+      return try .method(
+        channelID: channelID,
+        method: .basicDeliver(decodeBasicDeliver(from: &buf)))
+    }
+
+    // All other methods go through the generic codec
+    let data = Data(buffer: payload)
+    let method = try codec.decodeMethod(from: data)
+    return .method(channelID: channelID, method: method)
+  }
+
+  /// Decode Basic.Deliver fields directly from ByteBuffer, avoiding
+  /// a ByteBuffer→Data copy and the WireDecoder intermediary.
+  private func decodeBasicDeliver(from buf: inout ByteBuffer) throws -> BasicDeliver {
+    // Consumer tag (short string)
+    guard let tagLen = buf.readInteger(as: UInt8.self),
+      let consumerTag = buf.readString(length: Int(tagLen))
+    else {
+      throw WireFormatError.insufficientData(needed: 1, available: buf.readableBytes)
+    }
+
+    // Delivery tag (uint64) + flags byte (redelivered)
+    guard let deliveryTag = buf.readInteger(endianness: .big, as: UInt64.self),
+      let flagsByte = buf.readInteger(as: UInt8.self)
+    else {
+      throw WireFormatError.insufficientData(needed: 9, available: buf.readableBytes)
+    }
+    let redelivered = (flagsByte & 0x01) != 0
+
+    // Exchange (short string)
+    guard let exchLen = buf.readInteger(as: UInt8.self),
+      let exchange = buf.readString(length: Int(exchLen))
+    else {
+      throw WireFormatError.insufficientData(needed: 1, available: buf.readableBytes)
+    }
+
+    // Routing key (short string)
+    guard let rkLen = buf.readInteger(as: UInt8.self),
+      let routingKey = buf.readString(length: Int(rkLen))
+    else {
+      throw WireFormatError.insufficientData(needed: 1, available: buf.readableBytes)
+    }
+
+    return BasicDeliver(
+      consumerTag: consumerTag,
+      deliveryTag: deliveryTag,
+      redelivered: redelivered,
+      exchange: exchange,
+      routingKey: routingKey
+    )
   }
 
   func decodeLast(context: ChannelHandlerContext, buffer: inout ByteBuffer, seenEOF: Bool) throws
