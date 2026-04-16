@@ -152,6 +152,50 @@ struct ConnectionIntegrationTests {
   }
 }
 
+// MARK: - Update Secret Tests
+
+@Suite("UpdateSecret Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
+struct UpdateSecretIntegrationTests {
+
+  // With the internal (non-OAuth) auth backend, the server accepts
+  // update-secret but treats it as a no-op.
+  @Test("update-secret succeeds with the internal auth backend", .timeLimit(.minutes(1)))
+  func updateSecretSucceeds() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    try await connection.updateSecret("guest", reason: "token refresh")
+    let isConnected = await connection.connected
+    #expect(isConnected)
+  }
+
+  @Test("update-secret can be called multiple times", .timeLimit(.minutes(1)))
+  func updateSecretMultipleTimes() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    for i in 1...3 {
+      try await connection.updateSecret("secret-\(i)", reason: "refresh #\(i)")
+    }
+    let isConnected = await connection.connected
+    #expect(isConnected)
+  }
+
+  @Test("connection is usable after update-secret", .timeLimit(.minutes(1)))
+  func connectionUsableAfterUpdateSecret() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    try await connection.updateSecret("guest", reason: "refresh")
+
+    let channel = try await connection.openChannel()
+    let q = try await channel.queue("", exclusive: true)
+    let queueName = await q.name
+    #expect(!queueName.isEmpty)
+    try await channel.close()
+  }
+}
+
 // MARK: - Channel Tests
 
 @Suite("Channel Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
