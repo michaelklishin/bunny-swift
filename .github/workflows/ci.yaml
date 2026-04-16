@@ -258,3 +258,151 @@ jobs:
       - name: Stop RabbitMQ container
         if: always()
         run: docker stop rabbitmq-tls && docker rm rabbitmq-tls || true
+
+  oauth2-tests-linux:
+    name: OAuth 2 Tests (Linux)
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        rabbitmq-series:
+          - "4.1"
+          - "4.2"
+        runner:
+          - "ubuntu-22.04"
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: ${{ env.SWIFT_VERSION }}
+
+      - name: Generate RSA signing keys and Erlang cookie
+        run: |
+          mkdir -p ci/oauth2/keys
+          openssl genpkey -algorithm RSA -out ci/oauth2/keys/signing_key.pem \
+            -pkeyopt rsa_keygen_bits:2048
+          openssl rsa -pubout -in ci/oauth2/keys/signing_key.pem \
+            -out ci/oauth2/keys/signing_key_pub.pem
+          echo 'oauth2-test-cookie' > ci/oauth2/keys/.erlang.cookie
+          chmod 600 ci/oauth2/keys/.erlang.cookie
+          sudo chown 999:999 ci/oauth2/keys/.erlang.cookie
+
+      - name: Start RabbitMQ
+        run: |
+          docker run -d --name rabbitmq-oauth2 \
+            --hostname rabbitmq-oauth2 \
+            -p 5672:5672 \
+            -v ${{ github.workspace }}/ci/oauth2/keys/.erlang.cookie:/var/lib/rabbitmq/.erlang.cookie \
+            -v ${{ github.workspace }}/ci/oauth2/keys/signing_key_pub.pem:/etc/rabbitmq/signing_key_pub.pem:ro \
+            rabbitmq:${{ matrix.rabbitmq-series }}-management
+
+      - name: Wait for RabbitMQ to start
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec rabbitmq-oauth2 rabbitmqctl await_startup --timeout 60; then
+              echo "RabbitMQ is ready"
+              exit 0
+            fi
+            echo "Waiting for container... ($i/60)"
+            sleep 2
+          done
+          echo "RabbitMQ failed to start. Container logs:"
+          docker logs rabbitmq-oauth2
+          exit 1
+
+      - name: Configure OAuth 2
+        run: |
+          docker exec rabbitmq-oauth2 rabbitmq-plugins enable rabbitmq_auth_backend_oauth2
+          docker exec rabbitmq-oauth2 rabbitmqctl eval '
+            application:set_env(rabbit, auth_backends, [rabbit_auth_backend_oauth2, rabbit_auth_backend_internal]),
+            application:set_env(rabbitmq_auth_backend_oauth2, resource_server_id, <<"rabbitmq">>),
+            application:set_env(rabbitmq_auth_backend_oauth2, preferred_username_claims, [<<"sub">>]),
+            application:set_env(rabbitmq_auth_backend_oauth2, key_config,
+              [{signing_keys, #{<<"test-key">> => {pem, element(2, file:read_file(<<"/etc/rabbitmq/signing_key_pub.pem">>))}}},
+               {default_key, <<"test-key">>}]).
+          '
+
+      - name: Verify OAuth 2 plugin is enabled
+        run: docker exec rabbitmq-oauth2 rabbitmq-plugins list -e | grep oauth2
+
+      - name: Build
+        run: swift build
+
+      - name: Run OAuth 2 tests
+        env:
+          RUN_OAUTH2_TESTS: "1"
+          OAUTH2_SIGNING_KEY_PATH: ${{ github.workspace }}/ci/oauth2/keys/signing_key.pem
+          OAUTH2_RABBITMQ_PORT: "5672"
+        run: swift test --filter OAuth2
+
+      - name: Stop RabbitMQ container
+        if: always()
+        run: docker stop rabbitmq-oauth2 && docker rm rabbitmq-oauth2 || true
+
+  oauth2-tests-macos:
+    name: OAuth 2 Tests (macOS)
+    runs-on: macos-14
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+
+      - name: Install RabbitMQ
+        run: brew install rabbitmq
+
+      - name: Generate RSA signing keys
+        run: |
+          mkdir -p ci/oauth2/keys
+          openssl genpkey -algorithm RSA -out ci/oauth2/keys/signing_key.pem \
+            -pkeyopt rsa_keygen_bits:2048
+          openssl rsa -pubout -in ci/oauth2/keys/signing_key.pem \
+            -out ci/oauth2/keys/signing_key_pub.pem
+
+      - name: Start RabbitMQ
+        run: |
+          brew services start rabbitmq
+          for i in $(seq 1 60); do
+            if rabbitmqctl status > /dev/null 2>&1; then
+              echo "RabbitMQ is ready"
+              break
+            fi
+            echo "Waiting for RabbitMQ... ($i/60)"
+            sleep 2
+          done
+
+      - name: Configure OAuth 2
+        run: |
+          rabbitmq-plugins enable rabbitmq_auth_backend_oauth2
+          SIGNING_KEY_ABS=$(cd ci/oauth2/keys && pwd)/signing_key_pub.pem
+          rabbitmqctl eval "
+            application:set_env(rabbit, auth_backends, [rabbit_auth_backend_oauth2, rabbit_auth_backend_internal]),
+            application:set_env(rabbitmq_auth_backend_oauth2, resource_server_id, <<\"rabbitmq\">>),
+            application:set_env(rabbitmq_auth_backend_oauth2, preferred_username_claims, [<<\"sub\">>]),
+            application:set_env(rabbitmq_auth_backend_oauth2, key_config,
+              [{signing_keys, #{<<\"test-key\">> => {pem, element(2, file:read_file(<<\"$SIGNING_KEY_ABS\">>))}}},
+               {default_key, <<\"test-key\">>}]).
+          "
+
+      - name: Verify OAuth 2 plugin
+        run: rabbitmq-plugins list -e | grep oauth2
+
+      - name: Build
+        run: swift build
+
+      - name: Run OAuth 2 tests
+        env:
+          RUN_OAUTH2_TESTS: "1"
+          OAUTH2_SIGNING_KEY_PATH: ${{ github.workspace }}/ci/oauth2/keys/signing_key.pem
+          OAUTH2_RABBITMQ_PORT: "5672"
+        run: swift test --filter OAuth2
+
+      - name: Stop RabbitMQ
+        if: always()
+        run: brew services stop rabbitmq || true

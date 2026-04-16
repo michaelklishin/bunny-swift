@@ -81,6 +81,8 @@ public enum Method: Sendable, Equatable {
   case connectionCloseOk
   case connectionBlocked(ConnectionBlocked)
   case connectionUnblocked
+  case connectionUpdateSecret(ConnectionUpdateSecret)
+  case connectionUpdateSecretOk
 
   // Channel class (20)
   case channelOpen(ChannelOpen)
@@ -160,6 +162,8 @@ public enum Method: Sendable, Equatable {
     case .connectionCloseOk: return MethodID(classID: 10, methodID: 51)
     case .connectionBlocked: return MethodID(classID: 10, methodID: 60)
     case .connectionUnblocked: return MethodID(classID: 10, methodID: 61)
+    case .connectionUpdateSecret: return MethodID(classID: 10, methodID: 70)
+    case .connectionUpdateSecretOk: return MethodID(classID: 10, methodID: 71)
 
     // Channel
     case .channelOpen: return MethodID(classID: 20, methodID: 10)
@@ -229,7 +233,7 @@ public enum Method: Sendable, Equatable {
   public var expectsResponse: Bool {
     switch self {
     case .connectionStartOk, .connectionSecureOk, .connectionTuneOk,
-      .connectionOpen, .connectionClose,
+      .connectionOpen, .connectionClose, .connectionUpdateSecret,
       .channelOpen, .channelFlow, .channelClose,
       .exchangeDeclare, .exchangeDelete, .exchangeBind, .exchangeUnbind,
       .queueDeclare, .queueBind, .queueUnbind, .queuePurge, .queueDelete,
@@ -389,6 +393,16 @@ public struct ConnectionBlocked: Sendable, Equatable {
   public var reason: String
 
   public init(reason: String) {
+    self.reason = reason
+  }
+}
+
+public struct ConnectionUpdateSecret: Sendable, Equatable {
+  public var newSecret: String
+  public var reason: String
+
+  public init(newSecret: String, reason: String) {
+    self.newSecret = newSecret
     self.reason = reason
   }
 }

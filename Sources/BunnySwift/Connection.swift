@@ -29,6 +29,9 @@ public actor Connection {
   private var resolvedEndpoints: [Endpoint]
   private var endpointIndex: Int = 0
 
+  // Pending response for connection-level (channel 0) RPC methods like update-secret.
+  private var pendingConnectionResponse: CheckedContinuation<AMQPMethod, any Error>?
+
   private var onBlockedHandlers: [@Sendable (String) -> Void] = []
   private var onUnblockedHandlers: [@Sendable () -> Void] = []
   private var onCloseHandlers: [@Sendable (ConnectionClose) -> Void] = []
@@ -226,8 +229,11 @@ public actor Connection {
     case .connectionClose(let close):
       for handler in onCloseHandlers { handler(close) }
       isOpen = false
+      if let continuation = pendingConnectionResponse {
+        pendingConnectionResponse = nil
+        continuation.resume(throwing: ConnectionError.protocolError(close.replyText))
+      }
       try? await transport.send(.method(channelID: 0, method: .connectionCloseOk))
-    // Let the frame stream end naturally to trigger handleDisconnection
 
     case .connectionBlocked(let blocked):
       blockedReason = blocked.reason
@@ -236,6 +242,10 @@ public actor Connection {
     case .connectionUnblocked:
       blockedReason = nil
       for handler in onUnblockedHandlers { handler() }
+
+    case .connectionUpdateSecretOk:
+      pendingConnectionResponse?.resume(returning: method)
+      pendingConnectionResponse = nil
 
     default:
       break
@@ -252,6 +262,12 @@ public actor Connection {
     isOpen = false
     frameDispatchTask = nil
     frameIterator = nil
+
+    if let continuation = pendingConnectionResponse {
+      pendingConnectionResponse = nil
+      continuation.resume(throwing: ConnectionError.notConnected)
+    }
+
     await transport.markDisconnected()
 
     for channel in channels.values {
@@ -458,12 +474,39 @@ public actor Connection {
     onConsumerTagChangeHandlers.append(handler)
   }
 
+  // MARK: - Secret Update
+
+  /// Sends `connection.update-secret` to the broker, e.g. after an OAuth 2 token refresh.
+  public func updateSecret(_ newSecret: String, reason: String) async throws {
+    guard isOpen else { throw ConnectionError.notConnected }
+    guard pendingConnectionResponse == nil else {
+      throw ConnectionError.protocolError("Another connection-level RPC is already in progress")
+    }
+
+    let method = Method.connectionUpdateSecret(
+      ConnectionUpdateSecret(newSecret: newSecret, reason: reason))
+    try await transport.send(.method(channelID: 0, method: method))
+
+    let response = try await withCheckedThrowingContinuation { continuation in
+      pendingConnectionResponse = continuation
+    }
+
+    guard case .connectionUpdateSecretOk = response else {
+      throw ConnectionError.protocolError("Expected connection.update-secret-ok")
+    }
+  }
+
   // MARK: - Close
 
   public func close() async throws {
     guard isOpen else { return }
     closedByClient = true
     isOpen = false
+
+    if let continuation = pendingConnectionResponse {
+      pendingConnectionResponse = nil
+      continuation.resume(throwing: ConnectionError.notConnected)
+    }
 
     for channel in channels.values {
       try? await channel.close()

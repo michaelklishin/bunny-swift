@@ -373,6 +373,82 @@ struct ConnectionMethodTests {
     let decoded = try codec.decode(from: &data)
     #expect(decoded == frame)
   }
+
+  @Test("Connection.UpdateSecret roundtrip")
+  func connectionUpdateSecret() throws {
+    let codec = FrameCodec()
+    let frame = Frame.method(
+      channelID: 0,
+      method: .connectionUpdateSecret(
+        ConnectionUpdateSecret(newSecret: "new-jwt-token-value", reason: "token refresh")))
+    var data = try codec.encode(frame)
+    #expect(try codec.decode(from: &data) == frame)
+  }
+
+  @Test("Connection.UpdateSecret roundtrip with empty values")
+  func connectionUpdateSecretEmpty() throws {
+    let codec = FrameCodec()
+    let frame = Frame.method(
+      channelID: 0,
+      method: .connectionUpdateSecret(ConnectionUpdateSecret(newSecret: "", reason: "")))
+    var data = try codec.encode(frame)
+    #expect(try codec.decode(from: &data) == frame)
+  }
+
+  @Test("Connection.UpdateSecretOk roundtrip")
+  func connectionUpdateSecretOk() throws {
+    let codec = FrameCodec()
+    let frame = Frame.method(channelID: 0, method: .connectionUpdateSecretOk)
+    var data = try codec.encode(frame)
+    #expect(try codec.decode(from: &data) == frame)
+  }
+
+  @Test(
+    "Connection.UpdateSecret roundtrip with various payloads",
+    arguments: [
+      ("short", "refresh"),
+      (
+        "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
+        "scheduled token refresh"
+      ),
+      (String(repeating: "x", count: 1000), "large token"),
+      ("secret-with-special-chars-!@#$%^&*()", "reason with unicode: café"),
+    ]
+  )
+  func connectionUpdateSecretVariousPayloads(newSecret: String, reason: String) throws {
+    let codec = FrameCodec()
+    let frame = Frame.method(
+      channelID: 0,
+      method: .connectionUpdateSecret(
+        ConnectionUpdateSecret(newSecret: newSecret, reason: reason)))
+    var data = try codec.encode(frame)
+    #expect(try codec.decode(from: &data) == frame)
+  }
+
+  @Test("Decode a hand-crafted Connection.UpdateSecretOk frame")
+  func decodeRawUpdateSecretOk() throws {
+    let codec = FrameCodec()
+    // Type=method(1), Channel=0, Size=4, ClassID=10, MethodID=71, FrameEnd=0xCE
+    var raw = Data([
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04,
+      0x00, 0x0A, 0x00, 0x47, 0xCE,
+    ])
+    let frame = try codec.decode(from: &raw)
+    #expect(frame == .method(channelID: 0, method: .connectionUpdateSecretOk))
+    #expect(raw.isEmpty)
+  }
+
+  @Test("Connection.UpdateSecret rejects reason longer than 255 bytes")
+  func connectionUpdateSecretReasonTooLong() throws {
+    let codec = FrameCodec()
+    let frame = Frame.method(
+      channelID: 0,
+      method: .connectionUpdateSecret(
+        ConnectionUpdateSecret(
+          newSecret: "token",
+          reason: String(repeating: "a", count: 256))))
+    #expect(throws: (any Error).self) { try codec.encode(frame) }
+  }
 }
 
 @Suite("Channel Method Frame Tests")
@@ -1213,6 +1289,10 @@ struct MethodPropertiesTests {
     #expect(
       Method.basicPublish(BasicPublish(routingKey: "")).methodID
         == MethodID(classID: 60, methodID: 40))
+    let updateSecret = Method.connectionUpdateSecret(
+      ConnectionUpdateSecret(newSecret: "", reason: ""))
+    #expect(updateSecret.methodID == MethodID(classID: 10, methodID: 70))
+    #expect(Method.connectionUpdateSecretOk.methodID == MethodID(classID: 10, methodID: 71))
     #expect(Method.txSelect.methodID == MethodID(classID: 90, methodID: 10))
     #expect(Method.confirmSelect(ConfirmSelect()).methodID == MethodID(classID: 85, methodID: 10))
   }
@@ -1242,6 +1322,10 @@ struct MethodPropertiesTests {
     #expect(Method.connectionOpen(ConnectionOpen()).expectsResponse == true)
     #expect(Method.channelOpen(ChannelOpen()).expectsResponse == true)
     #expect(Method.queueDeclare(QueueDeclare()).expectsResponse == true)
+    let updateSecret = Method.connectionUpdateSecret(
+      ConnectionUpdateSecret(newSecret: "", reason: ""))
+    #expect(updateSecret.expectsResponse == true)
+    #expect(Method.connectionUpdateSecretOk.expectsResponse == false)
     #expect(Method.basicAck(BasicAck(deliveryTag: 0)).expectsResponse == false)
     #expect(Method.connectionCloseOk.expectsResponse == false)
   }

@@ -263,6 +263,13 @@ public struct FrameCodec: Sendable {
     case .connectionUnblocked:
       break  // no payload
 
+    case .connectionUpdateSecret(let m):
+      encoder.writeLongString(m.newSecret)
+      try encoder.writeShortString(m.reason)
+
+    case .connectionUpdateSecretOk:
+      break  // no payload
+
     // Channel class
     case .channelOpen(let m):
       try encoder.writeShortString(m.reserved1)
@@ -561,6 +568,14 @@ public struct FrameCodec: Sendable {
 
     case (10, 61):  // Unblocked
       return .connectionUnblocked
+
+    case (10, 70):  // UpdateSecret
+      let newSecret = try decoder.readLongString()
+      let reason = try decoder.readShortString()
+      return .connectionUpdateSecret(ConnectionUpdateSecret(newSecret: newSecret, reason: reason))
+
+    case (10, 71):  // UpdateSecretOk
+      return .connectionUpdateSecretOk
 
     // Channel class (20)
     case (20, 10):  // Open

@@ -152,6 +152,116 @@ struct ConnectionIntegrationTests {
   }
 }
 
+// MARK: - Update Secret Tests
+
+@Suite("UpdateSecret Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
+struct UpdateSecretIntegrationTests {
+
+  // With the internal (non-OAuth) auth backend, the server accepts
+  // update-secret but treats it as a no-op.
+  @Test("update-secret succeeds with the internal auth backend", .timeLimit(.minutes(1)))
+  func updateSecretSucceeds() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    try await connection.updateSecret("guest", reason: "token refresh")
+    let isConnected = await connection.connected
+    #expect(isConnected)
+  }
+
+  @Test("update-secret can be called multiple times", .timeLimit(.minutes(1)))
+  func updateSecretMultipleTimes() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    for i in 1...3 {
+      try await connection.updateSecret("secret-\(i)", reason: "refresh #\(i)")
+    }
+    let isConnected = await connection.connected
+    #expect(isConnected)
+  }
+
+  @Test("connection is usable after update-secret", .timeLimit(.minutes(1)))
+  func connectionUsableAfterUpdateSecret() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    try await connection.updateSecret("guest", reason: "refresh")
+
+    let channel = try await connection.openChannel()
+    let q = try await channel.queue("", exclusive: true)
+    let queueName = await q.name
+    #expect(!queueName.isEmpty)
+    try await channel.close()
+  }
+
+  @Test("publish and consume work after update-secret", .timeLimit(.minutes(1)))
+  func publishAndConsumeAfterUpdateSecret() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    try await connection.updateSecret("guest", reason: "refresh")
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+
+    let body = "after-update-secret"
+    try await queue.publish(body)
+
+    let response = try await queue.get(acknowledgementMode: .automatic)
+    #expect(response?.bodyString == body)
+
+    _ = try await queue.delete()
+  }
+
+  @Test("update-secret with an active consumer", .timeLimit(.minutes(1)))
+  func updateSecretWithActiveConsumer() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    let channel = try await connection.openChannel()
+    let queue = try await channel.temporaryQueue()
+    let stream = try await queue.consume(acknowledgementMode: .automatic)
+
+    try await connection.updateSecret("guest", reason: "refresh while consuming")
+
+    // Publish after the secret update and verify delivery through the active consumer
+    try await queue.publish("delivered-after-refresh")
+
+    var received: String?
+    for try await message in stream {
+      received = message.bodyString
+      break
+    }
+    #expect(received == "delivered-after-refresh")
+
+    try await stream.cancel()
+    _ = try await queue.delete()
+  }
+
+  @Test("update-secret with a 255-byte reason", .timeLimit(.minutes(1)))
+  func updateSecretMaxLengthReason() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try? await connection.close() } }
+
+    let reason = String(repeating: "r", count: 255)
+    try await connection.updateSecret("guest", reason: reason)
+
+    let isConnected = await connection.connected
+    #expect(isConnected)
+  }
+
+  @Test("update-secret on a closed connection throws", .timeLimit(.minutes(1)))
+  func updateSecretAfterClose() async throws {
+    let connection = try await TestConfig.openConnection()
+    try await connection.close()
+
+    await #expect(throws: ConnectionError.self) {
+      try await connection.updateSecret("guest", reason: "too late")
+    }
+  }
+}
+
 // MARK: - Channel Tests
 
 @Suite("Channel Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
