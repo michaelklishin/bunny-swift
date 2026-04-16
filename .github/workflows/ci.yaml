@@ -260,7 +260,7 @@ jobs:
         run: docker stop rabbitmq-tls && docker rm rabbitmq-tls || true
 
   oauth2-tests-linux:
-    name: OAuth2 Tests (Linux)
+    name: OAuth 2 Tests (Linux)
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -314,7 +314,7 @@ jobs:
           docker logs rabbitmq-oauth2
           exit 1
 
-      - name: Configure OAuth2
+      - name: Configure OAuth 2
         run: |
           docker exec rabbitmq-oauth2 rabbitmq-plugins enable rabbitmq_auth_backend_oauth2
           docker exec rabbitmq-oauth2 rabbitmqctl eval '
@@ -326,13 +326,13 @@ jobs:
                {default_key, <<"test-key">>}]).
           '
 
-      - name: Verify OAuth2 plugin is enabled
+      - name: Verify OAuth 2 plugin is enabled
         run: docker exec rabbitmq-oauth2 rabbitmq-plugins list -e | grep oauth2
 
       - name: Build
         run: swift build
 
-      - name: Run OAuth2 tests
+      - name: Run OAuth 2 tests
         env:
           RUN_OAUTH2_TESTS: "1"
           OAUTH2_SIGNING_KEY_PATH: ${{ github.workspace }}/ci/oauth2/keys/signing_key.pem
@@ -344,7 +344,7 @@ jobs:
         run: docker stop rabbitmq-oauth2 && docker rm rabbitmq-oauth2 || true
 
   oauth2-tests-macos:
-    name: OAuth2 Tests (macOS)
+    name: OAuth 2 Tests (macOS)
     runs-on: macos-14
     timeout-minutes: 15
 
@@ -377,7 +377,7 @@ jobs:
             sleep 2
           done
 
-      - name: Configure OAuth2
+      - name: Configure OAuth 2
         run: |
           rabbitmq-plugins enable rabbitmq_auth_backend_oauth2
           SIGNING_KEY_ABS=$(cd ci/oauth2/keys && pwd)/signing_key_pub.pem
@@ -390,13 +390,13 @@ jobs:
                {default_key, <<\"test-key\">>}]).
           "
 
-      - name: Verify OAuth2 plugin
+      - name: Verify OAuth 2 plugin
         run: rabbitmq-plugins list -e | grep oauth2
 
       - name: Build
         run: swift build
 
-      - name: Run OAuth2 tests
+      - name: Run OAuth 2 tests
         env:
           RUN_OAUTH2_TESTS: "1"
           OAUTH2_SIGNING_KEY_PATH: ${{ github.workspace }}/ci/oauth2/keys/signing_key.pem

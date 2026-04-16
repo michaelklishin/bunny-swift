@@ -425,6 +425,19 @@ struct ConnectionMethodTests {
     #expect(try codec.decode(from: &data) == frame)
   }
 
+  @Test("Decode a hand-crafted Connection.UpdateSecretOk frame")
+  func decodeRawUpdateSecretOk() throws {
+    let codec = FrameCodec()
+    // Type=method(1), Channel=0, Size=4, ClassID=10, MethodID=71, FrameEnd=0xCE
+    var raw = Data([
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04,
+      0x00, 0x0A, 0x00, 0x47, 0xCE,
+    ])
+    let frame = try codec.decode(from: &raw)
+    #expect(frame == .method(channelID: 0, method: .connectionUpdateSecretOk))
+    #expect(raw.isEmpty)
+  }
+
   @Test("Connection.UpdateSecret rejects reason longer than 255 bytes")
   func connectionUpdateSecretReasonTooLong() throws {
     let codec = FrameCodec()
