@@ -282,19 +282,19 @@ jobs:
 
       - name: Generate RSA signing keys
         run: |
-          mkdir -p tests/oauth2/keys
-          openssl genpkey -algorithm RSA -out tests/oauth2/keys/signing_key.pem \
+          mkdir -p Tests/oauth2/keys
+          openssl genpkey -algorithm RSA -out Tests/oauth2/keys/signing_key.pem \
             -pkeyopt rsa_keygen_bits:2048
-          openssl rsa -pubout -in tests/oauth2/keys/signing_key.pem \
-            -out tests/oauth2/keys/signing_key_pub.pem
+          openssl rsa -pubout -in Tests/oauth2/keys/signing_key.pem \
+            -out Tests/oauth2/keys/signing_key_pub.pem
 
       - name: Start RabbitMQ with OAuth2
         run: |
           docker run -d --name rabbitmq-oauth2 \
             -p 5672:5672 \
-            -v ${{ github.workspace }}/tests/oauth2/keys/signing_key_pub.pem:/etc/rabbitmq/signing_key_pub.pem:ro \
-            -v ${{ github.workspace }}/tests/oauth2/rabbitmq-ci.conf:/etc/rabbitmq/conf.d/10-oauth2.conf:ro \
-            -v ${{ github.workspace }}/tests/oauth2/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro \
+            -v ${{ github.workspace }}/Tests/oauth2/keys/signing_key_pub.pem:/etc/rabbitmq/signing_key_pub.pem:ro \
+            -v ${{ github.workspace }}/Tests/oauth2/rabbitmq-ci.conf:/etc/rabbitmq/conf.d/10-oauth2.conf:ro \
+            -v ${{ github.workspace }}/Tests/oauth2/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro \
             rabbitmq:${{ matrix.rabbitmq-series }}
 
       - name: Wait for RabbitMQ to start
@@ -314,7 +314,7 @@ jobs:
       - name: Run OAuth2 tests
         env:
           RUN_OAUTH2_TESTS: "1"
-          OAUTH2_SIGNING_KEY_PATH: ${{ github.workspace }}/tests/oauth2/keys/signing_key.pem
+          OAUTH2_SIGNING_KEY_PATH: ${{ github.workspace }}/Tests/oauth2/keys/signing_key.pem
           OAUTH2_RABBITMQ_PORT: "5672"
         run: swift test --filter OAuth2
 
@@ -338,20 +338,20 @@ jobs:
 
       - name: Generate RSA signing keys
         run: |
-          mkdir -p tests/oauth2/keys
-          openssl genpkey -algorithm RSA -out tests/oauth2/keys/signing_key.pem \
+          mkdir -p Tests/oauth2/keys
+          openssl genpkey -algorithm RSA -out Tests/oauth2/keys/signing_key.pem \
             -pkeyopt rsa_keygen_bits:2048
-          openssl rsa -pubout -in tests/oauth2/keys/signing_key.pem \
-            -out tests/oauth2/keys/signing_key_pub.pem
+          openssl rsa -pubout -in Tests/oauth2/keys/signing_key.pem \
+            -out Tests/oauth2/keys/signing_key_pub.pem
 
       - name: Enable OAuth2 plugin and configure
         run: |
           rabbitmq-plugins enable rabbitmq_auth_backend_oauth2
           CONF_DIR=$(brew --prefix)/etc/rabbitmq/conf.d
           mkdir -p "$CONF_DIR"
-          SIGNING_KEY_ABS=$(cd tests/oauth2/keys && pwd)/signing_key_pub.pem
+          SIGNING_KEY_ABS=$(cd Tests/oauth2/keys && pwd)/signing_key_pub.pem
           sed "s|/etc/rabbitmq/signing_key_pub.pem|$SIGNING_KEY_ABS|" \
-            tests/oauth2/rabbitmq-ci.conf > "$CONF_DIR/10-oauth2.conf"
+            Tests/oauth2/rabbitmq-ci.conf > "$CONF_DIR/10-oauth2.conf"
 
       - name: Start RabbitMQ
         run: |
@@ -374,7 +374,7 @@ jobs:
       - name: Run OAuth2 tests
         env:
           RUN_OAUTH2_TESTS: "1"
-          OAUTH2_SIGNING_KEY_PATH: ${{ github.workspace }}/tests/oauth2/keys/signing_key.pem
+          OAUTH2_SIGNING_KEY_PATH: ${{ github.workspace }}/Tests/oauth2/keys/signing_key.pem
           OAUTH2_RABBITMQ_PORT: "5672"
         run: swift test --filter OAuth2
 

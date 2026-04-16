@@ -38,4 +38,4 @@ DerivedData/
 # Testing
 .coverage/
 coverage.lcov
-tests/oauth2/keys/
+Tests/oauth2/keys/
