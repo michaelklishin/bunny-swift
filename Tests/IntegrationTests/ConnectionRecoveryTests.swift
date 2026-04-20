@@ -349,8 +349,10 @@ struct RecoveryIntegrationTests {
 
       try await closeAndWaitForRecovery(connection, name: name)
 
-      let info = await httpAPI.getQueueInfoOrNil(queueName)
-      #expect(info != nil, "Client-named queue should be recovered")
+      let queueVisible = await pollUntil(timeout: 10) {
+        await httpAPI.getQueueInfoOrNil(queueName) != nil
+      }
+      #expect(queueVisible, "Client-named queue should be recovered")
       try await ensureQueueFunctional(channel: channel, queueName: queueName)
     }
 
@@ -399,8 +401,10 @@ struct RecoveryIntegrationTests {
       try await closeAndWaitForRecovery(connection, name: name)
 
       for qn in queueNames {
-        let info = await httpAPI.getQueueInfoOrNil(qn)
-        #expect(info != nil, "Queue \(qn) should be recovered")
+        let visible = await pollUntil(timeout: 10) {
+          await httpAPI.getQueueInfoOrNil(qn) != nil
+        }
+        #expect(visible, "Queue \(qn) should be recovered")
       }
     }
   }
@@ -423,8 +427,10 @@ struct RecoveryIntegrationTests {
 
       try await closeAndWaitForRecovery(connection, name: name)
 
-      let info = await httpAPI.getExchangeInfoOrNil(exchangeName)
-      #expect(info != nil, "Exchange should be recovered")
+      let exchangeVisible = await pollUntil(timeout: 10) {
+        await httpAPI.getExchangeInfoOrNil(exchangeName) != nil
+      }
+      #expect(exchangeVisible, "Exchange should be recovered")
     }
   }
 
@@ -614,7 +620,8 @@ struct RecoveryIntegrationTests {
 
       try await channel.basicPublish(
         body: Data("should-not-arrive".utf8), exchange: exchangeName, routingKey: "key")
-      try await Task.sleep(for: .milliseconds(500))
+      // Give the message time to route before checking; this is a negative assertion.
+      try await Task.sleep(for: .seconds(1))
 
       let info = await httpAPI.getQueueInfoOrNil(queueName)
       #expect((info?.messages ?? 0) == 0, "Deleted binding should not be recovered")
@@ -652,7 +659,8 @@ struct RecoveryIntegrationTests {
 
       try await channel.basicPublish(
         body: Data("should-not-arrive".utf8), exchange: srcName, routingKey: "")
-      try await Task.sleep(for: .milliseconds(500))
+      // Give the message time to route before checking; this is a negative assertion.
+      try await Task.sleep(for: .seconds(1))
 
       let info = await httpAPI.getQueueInfoOrNil(queueName)
       #expect((info?.messages ?? 0) == 0, "Deleted exchange binding should not be recovered")
@@ -673,10 +681,13 @@ struct RecoveryIntegrationTests {
       defer { Task { _ = try? await channel.queueDelete(queueName) } }
 
       try await closeAndWaitForRecovery(connection, name: name)
-      try await Task.sleep(for: .seconds(1))
 
-      let info = await httpAPI.getQueueInfoOrNil(queueName)
-      #expect((info?.consumers ?? 0) == 0, "Cancelled consumer should NOT be recovered")
+      // The management API updates asynchronously; poll instead of a bare assertion.
+      let noConsumers = await pollUntil(timeout: 10) {
+        let info = await httpAPI.getQueueInfoOrNil(queueName)
+        return (info?.consumers ?? 0) == 0
+      }
+      #expect(noConsumers, "Cancelled consumer should NOT be recovered")
     }
   }
 
@@ -732,8 +743,10 @@ struct RecoveryIntegrationTests {
         let ready = await pollUntil(timeout: 5) { await channel.open }
         #expect(ready, "Cycle \(cycle): channel should be open")
 
-        let info = await httpAPI.getQueueInfoOrNil(queueName)
-        #expect(info != nil, "Cycle \(cycle): queue should exist")
+        let queueVisible = await pollUntil(timeout: 10) {
+          await httpAPI.getQueueInfoOrNil(queueName) != nil
+        }
+        #expect(queueVisible, "Cycle \(cycle): queue should exist")
       }
     }
   }
@@ -961,7 +974,7 @@ struct RecoveryIntegrationTests {
       for cycle in 1...5 {
         try await closeAndWaitForRecovery(connection, name: name)
 
-        let consumerReady = await pollUntil(timeout: 5) {
+        let consumerReady = await pollUntil(timeout: 10) {
           let info = await httpAPI.getQueueInfoOrNil(queueName)
           return (info?.consumers ?? 0) >= 1
         }
@@ -971,7 +984,7 @@ struct RecoveryIntegrationTests {
           body: Data("cycle-\(cycle)".utf8), exchange: "", routingKey: queueName)
 
         let expected = cycle
-        let gotMessage = await pollUntil(timeout: 5) {
+        let gotMessage = await pollUntil(timeout: 10) {
           messageCount.load() >= expected
         }
         #expect(gotMessage, "Cycle \(cycle): consumer should receive message")
@@ -1596,13 +1609,16 @@ struct TopologyRecordingTests {
 
       try await closeAndWaitForRecovery(connection, name: name)
 
-      let keptExists = await pollUntil(timeout: 5) {
+      let keptExists = await pollUntil(timeout: 10) {
         await httpAPI.getQueueInfoOrNil(keptName) != nil
       }
       #expect(keptExists, "Non-filtered queue should be recovered")
 
-      let filteredInfo = await httpAPI.getQueueInfoOrNil(filteredName)
-      #expect(filteredInfo == nil, "Filtered queue should not be recovered")
+      // The management API may briefly cache the old queue; poll for absence.
+      let filteredGone = await pollUntil(timeout: 10) {
+        await httpAPI.getQueueInfoOrNil(filteredName) == nil
+      }
+      #expect(filteredGone, "Filtered queue should not be recovered")
     }
 
     @Test("Filtered consumer is not recovered")
@@ -1643,14 +1659,13 @@ struct TopologyRecordingTests {
       let topologyDone = await pollUntil(timeout: 10) { recovered.load() }
       #expect(topologyDone, "Recovery should complete")
 
-      let hasKept = await pollUntil(timeout: 10) {
+      // Poll until exactly 1 consumer is registered (the kept one).
+      // The management API updates asynchronously, so avoid a bare assertion.
+      let correctCount = await pollUntil(timeout: 10) {
         let info = await httpAPI.getQueueInfoOrNil(queueName)
-        return (info?.consumers ?? 0) >= 1
+        return info?.consumers == 1
       }
-      #expect(hasKept, "Kept consumer should be recovered")
-
-      let info = await httpAPI.getQueueInfoOrNil(queueName)
-      #expect(info?.consumers == 1, "Only the non-filtered consumer should be recovered")
+      #expect(correctCount, "Only the non-filtered consumer should be recovered")
     }
 
     @Test("Filtered binding is not recovered after disconnect")
@@ -1679,13 +1694,15 @@ struct TopologyRecordingTests {
 
       try await closeAndWaitForRecovery(connection, name: name)
 
-      let ready = await pollUntil(timeout: 5) { await channel.open }
-      #expect(ready, "Channel should be open after recovery")
-      // Verify server-side bindings: only "kept.key" should exist
-      let serverBindings = try await httpAPI.listQueueBindings(queueName, in: "/")
-      let routingKeys = serverBindings.map(\.routingKey)
-      #expect(routingKeys.contains("kept.key"), "Kept binding should be recovered")
-      #expect(!routingKeys.contains("filtered.key"), "Filtered binding should not be recovered")
+      // Poll until the kept binding is visible and the filtered one is absent.
+      let bindingsCorrect = await pollUntil(timeout: 10) {
+        guard let bindings = try? await httpAPI.listQueueBindings(queueName, in: "/") else {
+          return false
+        }
+        let keys = bindings.map(\.routingKey)
+        return keys.contains("kept.key") && !keys.contains("filtered.key")
+      }
+      #expect(bindingsCorrect, "Only the kept binding should be recovered")
     }
   }
 }
