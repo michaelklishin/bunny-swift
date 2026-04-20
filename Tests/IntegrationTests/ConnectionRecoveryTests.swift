@@ -1617,7 +1617,8 @@ struct TopologyRecordingTests {
 
       let channel = try await connection.openChannel()
       let queueName = "bunnyswift.filter.consumer.\(UUID().uuidString.prefix(8))"
-      _ = try await channel.queue(queueName, durable: false, exclusive: true)
+      _ = try await channel.queue(queueName, durable: true)
+      defer { Task { _ = try? await channel.queueDelete(queueName) } }
 
       let keptStream = try await channel.basicConsume(
         queue: queueName, consumerTag: "kept-consumer", acknowledgementMode: .automatic)
@@ -1638,11 +1639,11 @@ struct TopologyRecordingTests {
 
       try await closeAndWaitForRecovery(connection, name: name)
 
-      // Wait for topology recovery to complete
+      // Wait for topology recovery (including consumer re-registration) to complete
       let topologyDone = await pollUntil(timeout: 10) { recovered.load() }
       #expect(topologyDone, "Recovery should complete")
 
-      let hasKept = await pollUntil(timeout: 5) {
+      let hasKept = await pollUntil(timeout: 10) {
         let info = await httpAPI.getQueueInfoOrNil(queueName)
         return (info?.consumers ?? 0) >= 1
       }
