@@ -18,12 +18,12 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
 
-      - name: Select Xcode 16.2
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+      - name: Select Xcode 16.3
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app
 
       - name: Check Swift version
         run: swift --version
@@ -33,14 +33,14 @@ jobs:
 
   build-macos:
     name: Build and Test (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Select Xcode 16.2
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+      - name: Select Xcode 16.3
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app
 
       - name: Check Swift version
         run: swift --version
@@ -345,14 +345,14 @@ jobs:
 
   oauth2-tests-macos:
     name: OAuth 2 Tests (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Select Xcode 16.2
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+      - name: Select Xcode 16.3
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app
 
       - name: Install RabbitMQ
         run: brew install rabbitmq
