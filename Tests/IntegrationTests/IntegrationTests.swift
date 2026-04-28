@@ -380,7 +380,7 @@ struct QueueIntegrationTests {
     let queueName = "bunnyswift.test.\(UUID().uuidString)"
 
     let queue = try await channel.queue(
-      queueName, durable: false, exclusive: false, autoDelete: true)
+      queueName, durable: true, exclusive: false, autoDelete: true)
     #expect(queue.name == queueName)
 
     let deletedCount = try await queue.delete()

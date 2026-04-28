@@ -26,6 +26,10 @@ swift test --filter "TestClassName/testMethodName"
 
 Test suites require a RabbitMQ node running on `localhost:5672` with default credentials (`guest`/`guest`).
 
+RabbitMQ 4.x deprecates transient non-exclusive queues (`transient_nonexcl_queues`). Declaring a queue
+with `durable: false` and `exclusive: false` causes the broker to close the connection with a protocol
+error. Always use `durable: true`, `exclusive: true`, or `temporaryQueue()` in tests.
+
 
 ## Repository Layout
 

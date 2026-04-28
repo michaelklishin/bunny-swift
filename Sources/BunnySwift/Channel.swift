@@ -45,13 +45,19 @@ public actor Channel {
   // Channel recovery event handlers
   private var recoveryHandlers: [@Sendable () async -> Void] = []
 
-  // Publisher confirms
+  // Publisher confirms: per-message tracking (basicPublish with tracking)
   private var nextPublishSeqNo: UInt64 = 1
   private var confirmHandlers: [UInt64: CheckedContinuation<Bool, Error>] = [:]
   private var publisherConfirmationTracking = false
   private var outstandingConfirmsLimit: Int = 0
   private var outstandingConfirmsCount: Int = 0
   private var confirmLimitWaiters: [CheckedContinuation<Void, Never>] = []
+
+  // Publisher confirms: batch tracking (publish, basicPublishBatch, waitForConfirms)
+  private var pendingConfirmSeqNos: Set<UInt64> = []
+  private var nackedSeqNos: Set<UInt64> = []
+  private var confirmCompletionWaiters:
+    [(upTo: UInt64, continuation: CheckedContinuation<Void, Error>)] = []
 
   // MARK: - Initialization
 
@@ -464,17 +470,23 @@ public actor Channel {
     await transport.flush()
 
     if confirmMode {
-      nextPublishSeqNo += 1
       if publisherConfirmationTracking {
+        nextPublishSeqNo += 1
         try await awaitConfirmation(seqNo: seqNo)
+      } else {
+        pendingConfirmSeqNos.insert(nextPublishSeqNo)
+        nextPublishSeqNo += 1
       }
     }
   }
 
-  /// Buffers writes for high throughput; call flush after batch.
+  /// Buffers writes for high throughput without flushing.
   ///
-  /// When publisher confirmation tracking is enabled, this method waits for broker
-  /// confirmation before returning. If the broker nacks the message, throws an error.
+  /// Unlike ``basicPublish``, this method never flushes or waits for broker
+  /// confirmation. The transport's write coalescing (threshold + timer)
+  /// handles flushing automatically.
+  ///
+  /// A call to ``flush`` will force buffered data to the socket.
   public func publish(
     body: Data,
     exchange: String = "",
@@ -490,8 +502,6 @@ public actor Channel {
       await waitForConfirmSlot()
     }
 
-    let seqNo = confirmMode ? nextPublishSeqNo : 0
-
     try await transport.writePublish(
       channelID: channelID,
       exchange: exchange,
@@ -504,11 +514,8 @@ public actor Channel {
     )
 
     if confirmMode {
+      pendingConfirmSeqNos.insert(nextPublishSeqNo)
       nextPublishSeqNo += 1
-      if publisherConfirmationTracking {
-        await transport.flush()
-        try await awaitConfirmation(seqNo: seqNo)
-      }
     }
   }
 
@@ -542,8 +549,11 @@ public actor Channel {
     }
 
     // Reserve sequence numbers for the entire batch before writing
-    let firstSeqNo = confirmMode ? nextPublishSeqNo : 0
     if confirmMode {
+      let firstSeqNo = nextPublishSeqNo
+      for i in 0..<UInt64(batchSize) {
+        pendingConfirmSeqNos.insert(firstSeqNo + i)
+      }
       nextPublishSeqNo += UInt64(batchSize)
     }
 
@@ -556,20 +566,9 @@ public actor Channel {
       bodies: bodies,
       frameMax: cachedFrameMax
     )
-    // No explicit flush: the transport's write buffering (threshold + timer)
-    // paces writes to avoid bursty flow that triggers broker flow control
 
     if confirmMode && publisherConfirmationTracking {
-      // Wait for all confirmations concurrently
-      try await withThrowingTaskGroup(of: Void.self) { group in
-        for i in 0..<UInt64(batchSize) {
-          let seqNo = firstSeqNo + i
-          group.addTask {
-            try await self.awaitConfirmation(seqNo: seqNo)
-          }
-        }
-        try await group.waitForAll()
-      }
+      try await waitForConfirms()
     }
   }
 
@@ -594,6 +593,23 @@ public actor Channel {
 
   public func flush() async {
     await transport?.flush()
+  }
+
+  /// Creates a ``PublishBatch`` for incrementally publishing messages
+  /// to the same exchange and routing key.
+  ///
+  /// Each `add` call buffers a message via the transport's write
+  /// coalescing. Call `publish` to flush and, when publisher confirms
+  /// are enabled, wait for broker acknowledgement.
+  public nonisolated func publishBatch(
+    exchange: String = "",
+    routingKey: String,
+    mandatory: Bool = false,
+    properties: BasicProperties = .persistent
+  ) -> PublishBatch {
+    PublishBatch(
+      channel: self, exchange: exchange, routingKey: routingKey,
+      mandatory: mandatory, properties: properties)
   }
 
   // MARK: - Consuming
@@ -740,11 +756,56 @@ public actor Channel {
     nextPublishSeqNo
   }
 
-  /// Wait for all outstanding publisher confirmations to complete.
+  /// Flushes the transport and waits for broker acknowledgement of every
+  /// message published so far on this channel.
+  ///
+  /// Throws ``ConnectionError/publisherNack(seqNo:)`` if any message
+  /// in the range was nacked.
   public func waitForConfirms() async throws {
     guard confirmMode else { return }
-    while !confirmHandlers.isEmpty {
-      try await Task.sleep(for: .milliseconds(10))
+    await transport?.flush()
+
+    let target = nextPublishSeqNo - 1
+    guard target > 0 else { return }
+
+    let hasUnconfirmedBatch = pendingConfirmSeqNos.contains { $0 <= target }
+    let hasUnconfirmedPerMsg = confirmHandlers.keys.contains { $0 <= target }
+
+    if !hasUnconfirmedBatch && !hasUnconfirmedPerMsg {
+      try drainNacks(upTo: target)
+      return
+    }
+
+    try await withCheckedThrowingContinuation { cont in
+      confirmCompletionWaiters.append((upTo: target, continuation: cont))
+    }
+  }
+
+  /// Throws if any nacked seqNos exist up to the target, then clears them.
+  private func drainNacks(upTo target: UInt64) throws {
+    let nacked = nackedSeqNos.filter { $0 <= target }
+    guard !nacked.isEmpty else { return }
+    let first = nacked.min()!
+    nackedSeqNos.subtract(nacked)
+    throw ConnectionError.publisherNack(seqNo: first)
+  }
+
+  /// Resumes any waitForConfirms callers whose target seqNo range
+  /// has been fully confirmed.
+  private func releaseCompletionWaiters() {
+    confirmCompletionWaiters.removeAll { waiter in
+      let hasUnconfirmedBatch = pendingConfirmSeqNos.contains { $0 <= waiter.upTo }
+      let hasUnconfirmedPerMsg = confirmHandlers.keys.contains { $0 <= waiter.upTo }
+      guard !hasUnconfirmedBatch && !hasUnconfirmedPerMsg else { return false }
+
+      let nacked = nackedSeqNos.filter { $0 <= waiter.upTo }
+      nackedSeqNos.subtract(nacked)
+      if let first = nacked.min() {
+        waiter.continuation.resume(throwing: ConnectionError.publisherNack(seqNo: first))
+      } else {
+        waiter.continuation.resume()
+      }
+      return true
     }
   }
 
@@ -984,6 +1045,8 @@ public actor Channel {
 
   private func handleConfirm(deliveryTag: UInt64, multiple: Bool, ack: Bool) {
     var confirmedCount = 0
+
+    // Per-message tracking (basicPublish with tracking)
     if multiple {
       var toResume: [(UInt64, CheckedContinuation<Bool, Error>)] = []
       for (tag, cont) in confirmHandlers where tag <= deliveryTag {
@@ -999,7 +1062,20 @@ public actor Channel {
       confirmedCount += 1
     }
 
-    // Release waiters if we freed up slots
+    // Batch tracking (publish, basicPublishBatch)
+    if multiple {
+      let matched = pendingConfirmSeqNos.filter { $0 <= deliveryTag }
+      for tag in matched {
+        pendingConfirmSeqNos.remove(tag)
+        if !ack { nackedSeqNos.insert(tag) }
+        confirmedCount += 1
+      }
+    } else if pendingConfirmSeqNos.remove(deliveryTag) != nil {
+      if !ack { nackedSeqNos.insert(deliveryTag) }
+      confirmedCount += 1
+    }
+
+    // Release backpressure waiters
     if publisherConfirmationTracking && outstandingConfirmsLimit > 0 {
       outstandingConfirmsCount -= confirmedCount
       while !confirmLimitWaiters.isEmpty && outstandingConfirmsCount < outstandingConfirmsLimit {
@@ -1007,6 +1083,8 @@ public actor Channel {
         waiter.resume()
       }
     }
+
+    releaseCompletionWaiters()
   }
 
   // MARK: - Recovery
@@ -1028,6 +1106,12 @@ public actor Channel {
       cont.resume(throwing: error)
     }
     confirmHandlers.removeAll()
+    pendingConfirmSeqNos.removeAll()
+    nackedSeqNos.removeAll()
+    for waiter in confirmCompletionWaiters {
+      waiter.continuation.resume(throwing: error)
+    }
+    confirmCompletionWaiters.removeAll()
     for waiter in confirmLimitWaiters {
       waiter.resume()
     }

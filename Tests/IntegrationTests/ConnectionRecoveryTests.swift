@@ -150,6 +150,8 @@ private func ensureQueueFunctional(
   channel: Channel,
   queueName: String
 ) async throws {
+  let ready = await pollUntil(timeout: 5) { await channel.open }
+  #expect(ready, "Channel should be open before publishing")
   try await channel.basicPublish(
     body: Data("recovery-test-msg".utf8), exchange: "", routingKey: queueName)
 
@@ -167,6 +169,8 @@ private func ensureBindingFunctional(
   queueName: String,
   routingKey: String = ""
 ) async throws {
+  let ready = await pollUntil(timeout: 5) { await channel.open }
+  #expect(ready, "Channel should be open before publishing")
   try await channel.basicPublish(
     body: Data("binding-test-msg".utf8), exchange: exchangeName, routingKey: routingKey)
 
@@ -281,9 +285,10 @@ struct RecoveryIntegrationTests {
 
       try await closeAndWaitForRecovery(connection, name: name)
 
-      #expect(await channel.open)
+      let qosChannelReady = await pollUntil(timeout: 5) { await channel.open }
+      #expect(qosChannelReady, "Channel should be open after recovery")
       let queueName = "bunnyswift.recovery.qos.\(UUID().uuidString.prefix(8))"
-      let queue = try await channel.queue(queueName, durable: false, autoDelete: true)
+      let queue = try await channel.queue(queueName, durable: true, autoDelete: true)
       defer { Task { _ = try? await queue.delete() } }
       try await queue.publish("qos test")
       let response = try await queue.get(acknowledgementMode: .automatic)
@@ -301,9 +306,10 @@ struct RecoveryIntegrationTests {
 
       try await closeAndWaitForRecovery(connection, name: name)
 
-      #expect(await channel.open)
+      let confirmsChannelReady = await pollUntil(timeout: 5) { await channel.open }
+      #expect(confirmsChannelReady, "Channel should be open after recovery")
       let queueName = "bunnyswift.recovery.confirms.\(UUID().uuidString.prefix(8))"
-      let queue = try await channel.queue(queueName, durable: false, autoDelete: true)
+      let queue = try await channel.queue(queueName, durable: true, autoDelete: true)
       defer { Task { _ = try? await queue.delete() } }
       try await queue.publish("confirm test")
       try await channel.waitForConfirms()
@@ -320,9 +326,10 @@ struct RecoveryIntegrationTests {
 
       try await closeAndWaitForRecovery(connection, name: name)
 
-      #expect(await channel.open)
+      let txChannelReady = await pollUntil(timeout: 5) { await channel.open }
+      #expect(txChannelReady, "Channel should be open after recovery")
       let queueName = "bunnyswift.recovery.tx.\(UUID().uuidString.prefix(8))"
-      let queue = try await channel.queue(queueName, durable: false, autoDelete: true)
+      let queue = try await channel.queue(queueName, durable: true, autoDelete: true)
       defer { Task { _ = try? await queue.delete() } }
       try await queue.publish("tx test")
       try await channel.txCommit()
@@ -563,7 +570,7 @@ struct RecoveryIntegrationTests {
 
       let channel = try await connection.openChannel()
       let queueName = "bunnyswift.recovery.deleted.q.\(UUID().uuidString.prefix(8))"
-      let queue = try await channel.queue(queueName, durable: false)
+      let queue = try await channel.queue(queueName, durable: true)
       _ = try await queue.delete()
 
       try await closeAndWaitForRecovery(connection, name: name)
@@ -767,7 +774,7 @@ struct RecoveryIntegrationTests {
       let queueName = "bunnyswift.recovery.ad.q.\(UUID().uuidString.prefix(8))"
 
       _ = try await channel.direct(exchangeName, autoDelete: true)
-      _ = try await channel.queue(queueName, durable: false, autoDelete: true)
+      _ = try await channel.queue(queueName, durable: true, autoDelete: true)
       try await channel.queueBind(
         queue: queueName, exchange: exchangeName, routingKey: "ad.key")
       _ = try await channel.basicConsume(queue: queueName, acknowledgementMode: .automatic)
@@ -1327,7 +1334,7 @@ struct TopologyRecordingTests {
 
     let channel = try await connection.openChannel()
     let queueName = "bunnyswift.rec.q.\(UUID().uuidString.prefix(8))"
-    let queue = try await channel.queue(queueName, durable: false, autoDelete: true)
+    let queue = try await channel.queue(queueName, durable: true, autoDelete: true)
     defer { Task { _ = try? await queue.delete() } }
 
     let queues = await connection.topologyRegistry.allQueues()
@@ -1360,7 +1367,7 @@ struct TopologyRecordingTests {
 
     let channel = try await connection.openChannel()
     let queueName = "bunnyswift.rec.qdel.\(UUID().uuidString.prefix(8))"
-    let queue = try await channel.queue(queueName, durable: false, autoDelete: true)
+    let queue = try await channel.queue(queueName, durable: true, autoDelete: true)
     _ = try await queue.delete()
 
     let queues = await connection.topologyRegistry.allQueues()
@@ -1377,7 +1384,7 @@ struct TopologyRecordingTests {
     let exchangeName = "bunnyswift.rec.bind.ex.\(UUID().uuidString.prefix(8))"
     let queueName = "bunnyswift.rec.bind.q.\(UUID().uuidString.prefix(8))"
     let exchange = try await channel.direct(exchangeName, autoDelete: true)
-    let queue = try await channel.queue(queueName, durable: false, autoDelete: true)
+    let queue = try await channel.queue(queueName, durable: true, autoDelete: true)
     try await channel.queueBind(queue: queueName, exchange: exchangeName, routingKey: "rk")
     defer {
       Task {
@@ -1401,7 +1408,7 @@ struct TopologyRecordingTests {
     let exchangeName = "bunnyswift.rec.unbind.ex.\(UUID().uuidString.prefix(8))"
     let queueName = "bunnyswift.rec.unbind.q.\(UUID().uuidString.prefix(8))"
     let exchange = try await channel.direct(exchangeName, autoDelete: true)
-    let queue = try await channel.queue(queueName, durable: false, autoDelete: true)
+    let queue = try await channel.queue(queueName, durable: true, autoDelete: true)
     try await channel.queueBind(queue: queueName, exchange: exchangeName, routingKey: "rk")
     try await channel.queueUnbind(queue: queueName, exchange: exchangeName, routingKey: "rk")
     defer {
