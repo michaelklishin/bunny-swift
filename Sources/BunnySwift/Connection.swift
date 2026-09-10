@@ -82,6 +82,21 @@ public actor Connection {
     return connection
   }
 
+  /// Opens a connection whose socket I/O runs on `eventLoopGroup` instead of the
+  /// library-wide `SharedEventLoopGroup`, which is sized to `System.coreCount`.
+  /// The caller keeps ownership of the group: the connection never shuts it down.
+  /// Automatic recovery reuses the same transport, so the group stays in effect
+  /// for the lifetime of the connection.
+  public static func open(
+    _ configuration: ConnectionConfiguration,
+    eventLoopGroup: EventLoopGroup
+  ) async throws -> Connection {
+    let transport = AMQPTransport(eventLoopGroup: eventLoopGroup)
+    let connection = Connection(transport: transport, configuration: configuration)
+    try await connection.connect()
+    return connection
+  }
+
   public static func open(uri: String) async throws -> Connection {
     let configuration = try ConnectionConfiguration.from(uri: uri)
     return try await open(configuration)
