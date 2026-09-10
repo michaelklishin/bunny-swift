@@ -82,6 +82,18 @@ public actor Connection {
     return connection
   }
 
+  /// Opens a connection on `eventLoopGroup` instead of the library-wide shared group.
+  /// The caller keeps ownership: the connection never shuts the group down.
+  public static func open(
+    _ configuration: ConnectionConfiguration,
+    eventLoopGroup: EventLoopGroup
+  ) async throws -> Connection {
+    let transport = AMQPTransport(eventLoopGroup: eventLoopGroup)
+    let connection = Connection(transport: transport, configuration: configuration)
+    try await connection.connect()
+    return connection
+  }
+
   public static func open(uri: String) async throws -> Connection {
     let configuration = try ConnectionConfiguration.from(uri: uri)
     return try await open(configuration)
