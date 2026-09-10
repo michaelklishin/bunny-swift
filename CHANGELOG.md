@@ -2,6 +2,11 @@
 
 ### Enhancements
 
+ * `Connection.open(_:eventLoopGroup:)`: open a connection on a caller-supplied
+   `EventLoopGroup` instead of the library-wide shared group (sized to
+   `System.coreCount`), so a host that already runs its own group keeps its
+   thread count
+
  * `ExchangeType` now supports non-standard exchange types (`.modulusHash`, `.localRandom`,
    `.consistentHash`, `.random`, `.jmsTopic`, `.recentHistory`) and a `.plugin(String)`
    catch-all for arbitrary plugin exchange types
